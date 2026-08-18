@@ -19,9 +19,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { formatFullDate } from '../utils/dateUtils';
 import DateFields from '../components/DateFields';
 import { supabase } from '../utils/supabase';
+
 const EMOJIS = ['🌿', '😊', '🌸', '🎸', '📚', '🏀', '✈️', '🎮', '🎨', '☕', '🔥', '💫'];
 
-// Full-screen settings — which "page" is currently shown inside the settings modal
 type SettingsPage = 'main' | 'notifications' | 'calendar' | 'privacy' | 'about';
 
 const ProfileScreen: React.FC = () => {
@@ -45,8 +45,6 @@ const ProfileScreen: React.FC = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('main');
 
-  // Local demo toggles for the settings tools (wire these up to your
-  // Supabase user_settings table / AppContext when ready)
   const [pushEnabled, setPushEnabled] = useState(true);
   const [messageNotif, setMessageNotif] = useState(true);
   const [likesNotif, setLikesNotif] = useState(true);
@@ -57,6 +55,14 @@ const ProfileScreen: React.FC = () => {
 
   const [privateAccount, setPrivateAccount] = useState(false);
   const [activityStatus, setActivityStatus] = useState(true);
+
+  useEffect(() => {
+    async function testConnection() {
+      const { data, error } = await supabase.from('profiles').select('*');
+      console.log('Data:', data, 'Error:', error);
+    }
+    testConnection();
+  }, []);
 
   const openEdit = () => {
     setName(profile.name);
@@ -83,7 +89,7 @@ const ProfileScreen: React.FC = () => {
       city: city.trim() || undefined,
       school: school.trim() || undefined,
       instagram: instagram.trim() || undefined,
-      interests: interestsText.split(',').map((s) => s.trim()).filter(Boolean),
+      interests: interestsText.split(',').map((s: string) => s.trim()).filter(Boolean),
       birthday: hasBirthday ? birthdayISO : undefined,
     });
     setEditing(false);
@@ -102,10 +108,13 @@ const ProfileScreen: React.FC = () => {
   const confirmLogOut = () => {
     Alert.alert('Log out', 'Are you sure you want to log out?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Log out', style: 'destructive', onPress: () => {
-        // TODO: wire to your auth sign-out call
-        closeSettings();
-      } },
+      {
+        text: 'Log out',
+        style: 'destructive',
+        onPress: () => {
+          closeSettings();
+        },
+      },
     ]);
   };
 
@@ -115,9 +124,11 @@ const ProfileScreen: React.FC = () => {
       'This will permanently delete your account and all your data. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => {
-          // TODO: wire to your account-deletion flow
-        } },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {},
+        },
       ]
     );
   };
@@ -133,7 +144,6 @@ const ProfileScreen: React.FC = () => {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* Top bar — chapda lock, o'ngda ... menyu (endi full-screen sozlamalarni ochadi) */}
         <View style={styles.topBar}>
           <Ionicons name="lock-closed-outline" size={16} color={colors.textFaint} />
           <TouchableOpacity onPress={openSettings} hitSlop={10}>
@@ -141,7 +151,6 @@ const ProfileScreen: React.FC = () => {
           </TouchableOpacity>
         </View>
 
-        {/* Header */}
         <View style={styles.headerRow}>
           <View style={{ flex: 1, paddingRight: spacing.md }}>
             <Text style={styles.name}>{profile.name}</Text>
@@ -153,7 +162,6 @@ const ProfileScreen: React.FC = () => {
 
         {!!profile.bio && <Text style={styles.bio}>{profile.bio}</Text>}
 
-        {/* Stat card — engil card ko'rinish, oldingi oddiy matn o'rniga */}
         <View style={styles.statCard}>
           <StatBlock value={stats.total} label="Friends" />
           <View style={styles.statDivider} />
@@ -176,7 +184,7 @@ const ProfileScreen: React.FC = () => {
 
         {profile.interests.length > 0 && (
           <View style={styles.interestsRow}>
-            {profile.interests.map((i) => (
+            {profile.interests.map((i: string) => (
               <Chip key={i} label={i} />
             ))}
           </View>
@@ -199,7 +207,7 @@ const ProfileScreen: React.FC = () => {
         <View style={{ height: spacing.xxl }} />
       </ScrollView>
 
-      {/* ---------------- EDIT PROFILE MODAL ---------------- */}
+      {/* EDIT PROFILE MODAL */}
       <Modal visible={editing} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -251,7 +259,6 @@ const ProfileScreen: React.FC = () => {
               <Text style={styles.label}>Bio</Text>
               <TextInput style={[styles.input, { minHeight: 70, textAlignVertical: 'top' }]} value={bio} onChangeText={setBio} multiline placeholderTextColor={colors.textFaint} />
 
-              {/* Birthday — endi to'liq ishlaydi: checkbox yoqilganda sana tanlash maydonlari chiqadi */}
               <Text style={styles.label}>Birthday</Text>
               <TouchableOpacity style={styles.birthdayToggle} onPress={() => setHasBirthday((v) => !v)} activeOpacity={0.7}>
                 <View style={[styles.checkbox, hasBirthday && styles.checkboxActive]}>
@@ -286,7 +293,7 @@ const ProfileScreen: React.FC = () => {
         </View>
       </Modal>
 
-      {/* ---------------- FULL-SCREEN SETTINGS ---------------- */}
+      {/* FULL-SCREEN SETTINGS MODAL */}
       <Modal visible={settingsOpen} animationType="slide" onRequestClose={closeSettings}>
         <SafeAreaView style={styles.settingsSafe}>
           <View style={styles.settingsTopBar}>
@@ -376,7 +383,7 @@ const ProfileScreen: React.FC = () => {
   );
 };
 
-const DetailRow: React.FC<{ icon: any; label: string }> = ({ icon, label }) => (
+const DetailRow: React.FC<{ icon: keyof typeof Ionicons.glyphMap; label: string }> = ({ icon, label }) => (
   <View style={styles.detailRow}>
     <Ionicons name={icon} size={15} color={colors.textDim} />
     <Text style={styles.detailText}>{label}</Text>
@@ -384,7 +391,7 @@ const DetailRow: React.FC<{ icon: any; label: string }> = ({ icon, label }) => (
 );
 
 const SettingRow: React.FC<{
-  icon: any;
+  icon: keyof typeof Ionicons.glyphMap;
   label: string;
   onPress?: () => void;
   danger?: boolean;
@@ -432,11 +439,11 @@ const styles = StyleSheet.create({
   scroll: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
 
   topBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.sm,
-  },
+  flexDirection: 'row',
+  justifyContent: 'space-between', // <-- 'justify' o'rniga 'justifyContent' ishlatiladi
+  alignItems: 'center',
+  paddingVertical: spacing.sm,
+},
 
   headerRow: {
     flexDirection: 'row',
@@ -533,7 +540,6 @@ const styles = StyleSheet.create({
   saveBtn: { backgroundColor: colors.primary, borderRadius: radius.pill, alignItems: 'center', paddingVertical: spacing.md, marginTop: spacing.lg },
   saveBtnText: { ...typography.bodyBold, color: colors.bg },
 
-  // Full-screen settings modal
   settingsSafe: { flex: 1, backgroundColor: colors.bg },
   settingsTopBar: {
     flexDirection: 'row',
@@ -550,11 +556,3 @@ const styles = StyleSheet.create({
 });
 
 export default ProfileScreen;
-
-useEffect(() => {
-  async function testConnection() {
-    const { data, error } = await supabase.from('profiles').select('*');
-    console.log('Data:', data, 'Error:', error);
-  }
-  testConnection();
-}, []);
