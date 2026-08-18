@@ -128,6 +128,9 @@ const FriendProfileScreen: React.FC = () => {
   const [pronouns, setPronouns] = useState('');
   const [howWeMet, setHowWeMet] = useState('');
   const [personalityNotes, setPersonalityNotes] = useState('');
+  const [hasBirthday, setHasBirthday] = useState(false);
+  const [birthdayISO, setBirthdayISO] = useState(new Date().toISOString());
+  const [birthdayYearKnown, setBirthdayYearKnown] = useState(false);
 
   // contact
   const [city, setCity] = useState('');
@@ -298,6 +301,11 @@ const FriendProfileScreen: React.FC = () => {
     setHowWeMet(friend.howWeMet ?? '');
     setPersonalityNotes(friend.personalityNotes ?? '');
 
+    const existingBday = friend.importantDates.find((d) => d.type === 'Birthday');
+    setHasBirthday(!!existingBday);
+    setBirthdayISO(existingBday?.date ?? new Date().toISOString());
+    setBirthdayYearKnown(existingBday?.yearKnown ?? false);
+
     setCity(friend.city ?? '');
     setSchool(friend.school ?? '');
     setPhone(friend.phone ?? '');
@@ -332,6 +340,29 @@ const FriendProfileScreen: React.FC = () => {
   };
 
   const saveEdit = () => {
+    // Sync the birthday field with the importantDates list, since that's
+    // where birthdays are actually stored (same as the "Important Dates"
+    // section below).
+    const existingBday = friend.importantDates.find((d) => d.type === 'Birthday');
+    if (hasBirthday) {
+      if (existingBday) {
+        updateImportantDate(friend.id, existingBday.id, {
+          date: birthdayISO,
+          yearKnown: birthdayYearKnown,
+        });
+      } else {
+        addImportantDate(friend.id, {
+          id: newId(),
+          label: 'Birthday',
+          type: 'Birthday',
+          date: birthdayISO,
+          yearKnown: birthdayYearKnown,
+        });
+      }
+    } else if (existingBday) {
+      deleteImportantDate(friend.id, existingBday.id);
+    }
+
     updateFriend(friend.id, {
       name: name.trim() || friend.name,
       nickname: nickname.trim() || undefined,
@@ -885,53 +916,94 @@ const FriendProfileScreen: React.FC = () => {
             )}
 
             {editSection === 'personal' && (
-              <>
-                <Text style={styles.label}>Gender</Text>
-                <View style={styles.wrapRow}>
-                  {GENDERS.map((g) => (
-                    <Chip key={g} label={g} active={gender === g} onPress={() => setGender(g)} />
-                  ))}
-                </View>
-                {gender === 'Custom' && (
-                  <TextInput
-                    style={styles.input}
-                    value={genderCustom}
-                    onChangeText={setGenderCustom}
-                    placeholder="Custom gender"
-                    placeholderTextColor={colors.textFaint}
-                  />
-                )}
+  <>
+    <Text style={styles.label}>Birthday</Text>
+    <TouchableOpacity
+      style={styles.birthdayToggle}
+      onPress={() => setHasBirthday((prev) => !prev)}
+      activeOpacity={0.7}
+      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+    >
+      <View style={[styles.checkbox, hasBirthday && styles.checkboxActive]}>
+        {hasBirthday && <View style={styles.checkboxDot} />}
+      </View>
+      <Text style={styles.birthdayToggleText}>Track their birthday</Text>
+    </TouchableOpacity>
 
-                <Text style={styles.label}>Pronouns</Text>
-                <TextInput
-                  style={styles.input}
-                  value={pronouns}
-                  onChangeText={setPronouns}
-                  placeholder="e.g. she/her, they/them"
-                  placeholderTextColor={colors.textFaint}
-                />
+    {hasBirthday && (
+      <View style={styles.birthdayFieldsWrap}>
+        <DateFields
+          value={birthdayISO}
+          yearKnown={birthdayYearKnown}
+          onChange={(iso, known) => {
+            setBirthdayISO(iso);
+            setBirthdayYearKnown(known);
+          }}
+        />
+        {birthdayYearKnown && getAgeTurning(birthdayISO) != null ? (
+          <View style={styles.ageBadge}>
+            <Ionicons name="balloon-outline" size={14} color={colors.primary} />
+            <Text style={styles.ageBadgeText}>
+              Turns {getAgeTurning(birthdayISO)} this year · {formatRelativeDay(daysUntilNextOccurrence(birthdayISO))}
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.ageBadge}>
+            <Ionicons name="calendar-outline" size={14} color={colors.textDim} />
+            <Text style={styles.ageBadgeText}>
+              {formatRelativeDay(daysUntilNextOccurrence(birthdayISO))} · year not set, so age isn't shown
+            </Text>
+          </View>
+        )}
+      </View>
+    )}
 
-                <Text style={styles.label}>How we met</Text>
-                <TextInput
-                  style={[styles.input, { minHeight: 70, textAlignVertical: 'top' }]}
-                  value={howWeMet}
-                  onChangeText={setHowWeMet}
-                  multiline
-                  placeholderTextColor={colors.textFaint}
-                />
+    <Text style={styles.label}>Gender</Text>
+    <View style={styles.wrapRow}>
+      {GENDERS.map((g) => (
+        <Chip key={g} label={g} active={gender === g} onPress={() => setGender(g)} />
+      ))}
+    </View>
+    {gender === 'Custom' && (
+      <TextInput
+        style={styles.input}
+        value={genderCustom}
+        onChangeText={setGenderCustom}
+        placeholder="Custom gender"
+        placeholderTextColor={colors.textFaint}
+      />
+    )}
 
-                <Text style={styles.label}>Personality notes</Text>
-                <TextInput
-                  style={[styles.input, { minHeight: 70, textAlignVertical: 'top' }]}
-                  value={personalityNotes}
-                  onChangeText={setPersonalityNotes}
-                  multiline
-                  placeholder="Introvert, loves deep conversations, night owl..."
-                  placeholderTextColor={colors.textFaint}
-                />
-                <View style={{ height: spacing.xxl }} />
-              </>
-            )}
+    <Text style={styles.label}>Pronouns</Text>
+    <TextInput
+      style={styles.input}
+      value={pronouns}
+      onChangeText={setPronouns}
+      placeholder="e.g. she/her, they/them"
+      placeholderTextColor={colors.textFaint}
+    />
+
+    <Text style={styles.label}>How we met</Text>
+    <TextInput
+      style={[styles.input, { minHeight: 70, textAlignVertical: 'top' }]}
+      value={howWeMet}
+      onChangeText={setHowWeMet}
+      multiline
+      placeholderTextColor={colors.textFaint}
+    />
+
+    <Text style={styles.label}>Personality notes</Text>
+    <TextInput
+      style={[styles.input, { minHeight: 70, textAlignVertical: 'top' }]}
+      value={personalityNotes}
+      onChangeText={setPersonalityNotes}
+      multiline
+      placeholder="Introvert, loves deep conversations, night owl..."
+      placeholderTextColor={colors.textFaint}
+    />
+    <View style={{ height: spacing.xxl }} />
+  </>
+)}
 
             {editSection === 'contact' && (
               <>
@@ -1326,8 +1398,36 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  saveBtn: { backgroundColor: colors.primary, borderRadius: radius.pill, alignItems: 'center', paddingVertical: spacing.md, marginTop: spacing.lg },
+   saveBtn: { backgroundColor: colors.primary, borderRadius: radius.pill, alignItems: 'center', paddingVertical: spacing.md, marginTop: spacing.lg },
   saveBtnText: { ...typography.bodyBold, color: colors.bg },
+
+  birthdayToggle: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm, marginBottom: spacing.sm },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.cardAlt,
+  },
+  checkboxActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  checkboxDot: { width: 8, height: 8, borderRadius: 2, backgroundColor: colors.bg },
+  birthdayToggleText: { ...typography.body, color: colors.text, marginLeft: spacing.sm },
+  birthdayFieldsWrap: { marginTop: spacing.xs, marginBottom: spacing.sm },
+  ageBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primary + '15',
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginTop: spacing.sm,
+  },
+  ageBadgeText: { ...typography.caption, color: colors.text, marginLeft: spacing.xs, flex: 1 },
+
+
 });
 
 export default FriendProfileScreen;

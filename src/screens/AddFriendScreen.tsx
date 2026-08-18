@@ -17,6 +17,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { RelationshipCategory, ImportantDate } from '../types';
 import DateFields from '../components/DateFields';
 import { newId } from '../utils/id';
+import { daysUntilNextOccurrence, formatRelativeDay, getAgeTurning } from '../utils/dateUtils';
 
 const CATEGORIES: RelationshipCategory[] = [
   'Best Friend',
@@ -69,6 +70,8 @@ const AddFriendScreen: React.FC = () => {
       .filter(Boolean);
 
     if (isEditing && existingFriend) {
+      // Keep the friend's importantDates list (source of truth for birthdays,
+      // same as FriendProfileScreen) in sync with the toggle/fields above.
       if (hasBirthday) {
         if (existingBirthday) {
           updateImportantDate(existingFriend.id, existingBirthday.id, {
@@ -100,6 +103,7 @@ const AddFriendScreen: React.FC = () => {
         school: school.trim() || undefined,
         interests,
         reconnectFrequencyDays: reconnectDays ? parseInt(reconnectDays, 10) : undefined,
+        updatedAt: new Date().toISOString(),
       });
     } else {
       const importantDates: ImportantDate[] = hasBirthday
@@ -132,9 +136,12 @@ const AddFriendScreen: React.FC = () => {
         reconnectFrequencyDays: reconnectDays ? parseInt(reconnectDays, 10) : undefined,
         favorite: false,
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        socialLinks: [],
+        isArchived: false,
       });
     }
-    navigation.goBack();
+    
   };
 
   return (
@@ -196,21 +203,46 @@ const AddFriendScreen: React.FC = () => {
         </View>
 
         <Text style={styles.label}>Birthday</Text>
-        <TouchableOpacity style={styles.birthdayToggle} onPress={() => setHasBirthday((v) => !v)}>
+        <TouchableOpacity
+          style={styles.birthdayToggle}
+          onPress={() => setHasBirthday((v) => !v)}
+          activeOpacity={0.7}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
           <View style={[styles.checkbox, hasBirthday && styles.checkboxActive]}>
             {hasBirthday && <View style={styles.checkboxDot} />}
           </View>
           <Text style={styles.birthdayToggleText}>Track {name.trim() ? `${name.trim()}'s` : 'their'} birthday</Text>
         </TouchableOpacity>
+
         {hasBirthday && (
-          <DateFields
-            value={birthdayISO}
-            yearKnown={birthdayYearKnown}
-            onChange={(iso, known) => {
-              setBirthdayISO(iso);
-              setBirthdayYearKnown(known);
-            }}
-          />
+          <View style={styles.birthdayFieldsWrap}>
+            <DateFields
+              value={birthdayISO}
+              yearKnown={birthdayYearKnown}
+              onChange={(iso, known) => {
+                setBirthdayISO(iso);
+                setBirthdayYearKnown(known);
+              }}
+            />
+            {/* Live preview — mirrors the age badge shown in FriendProfileScreen's
+                edit sheet, so birthdays feel consistent across both screens. */}
+            {birthdayYearKnown && getAgeTurning(birthdayISO) != null ? (
+              <View style={styles.ageBadge}>
+                <Ionicons name="balloon-outline" size={14} color={colors.primary} />
+                <Text style={styles.ageBadgeText}>
+                  Turns {getAgeTurning(birthdayISO)} this year · {formatRelativeDay(daysUntilNextOccurrence(birthdayISO))}
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.ageBadge}>
+                <Ionicons name="calendar-outline" size={14} color={colors.textDim} />
+                <Text style={styles.ageBadgeText}>
+                  {formatRelativeDay(daysUntilNextOccurrence(birthdayISO))} · year not set, so age isn't shown
+                </Text>
+              </View>
+            )}
+          </View>
         )}
 
         <Text style={styles.label}>City</Text>
@@ -304,8 +336,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  checkboxActive: { borderColor: colors.primary },
-  checkboxDot: { width: 10, height: 10, borderRadius: 3, backgroundColor: colors.primary },
+  checkboxActive: { borderColor: colors.primary, backgroundColor: colors.primary },
+  checkboxDot: { width: 10, height: 10, borderRadius: 3, backgroundColor: colors.bg },
+  birthdayFieldsWrap: { marginTop: spacing.xs, marginBottom: spacing.sm },
+  ageBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primary + '15',
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginTop: spacing.sm,
+  },
+  ageBadgeText: { ...typography.caption, color: colors.text, marginLeft: spacing.xs, flex: 1 },
 });
 
 export default AddFriendScreen;
