@@ -16,9 +16,11 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-// Deep link back into the app once the OAuth provider redirects to
-// Supabase and Supabase redirects back to us, e.g. relatr://auth-callback
-const redirectTo = Linking.createURL('auth-callback');
+// Expo Go va Standalone ilovalar uchun dynamically redirect URI yaratish
+const redirectTo = AuthSession.makeRedirectUri({
+  scheme: 'relatr',
+  path: 'auth-callback',
+});
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [session, setSession] = useState<Session | null>(null);
@@ -41,7 +43,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signInWithGoogle = useCallback(async () => {
     try {
-      // Ask Supabase for the provider auth URL, pointed back at our app.
+      // Supabase Google Auth so'rovi
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -54,15 +56,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { error: error?.message ?? 'Could not start Google sign-in.' };
       }
 
+      // In-app brauzerda auth oynasini ochish
       const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
 
       if (result.type !== 'success' || !result.url) {
-        // User cancelled — not an error to surface loudly.
         return {};
       }
 
-      // Supabase appends the session tokens as a URL fragment:
-      // relatr://auth-callback#access_token=...&refresh_token=...
+      // Supabase tokenlarini URL manzilidan ajratib olish
       const parsed = Linking.parse(result.url.replace('#', '?'));
       const accessToken = parsed.queryParams?.access_token as string | undefined;
       const refreshToken = parsed.queryParams?.refresh_token as string | undefined;
@@ -100,5 +101,7 @@ export function useAuth() {
   return ctx;
 }
 
-// Exposed for AuthSession-based flows / debugging.
+
 export const authRedirectUri = redirectTo;
+
+
