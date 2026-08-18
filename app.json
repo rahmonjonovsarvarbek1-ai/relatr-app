@@ -3,6 +3,7 @@
     "name": "relatr-app",
     "slug": "relatr-app",
     "version": "1.0.0",
+    "scheme": "relatr",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",

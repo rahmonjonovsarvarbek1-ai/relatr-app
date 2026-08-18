@@ -27,6 +27,7 @@ import {
 } from '../utils/dateUtils';
 import { Note, ImportantDate, ImportantDateType } from '../types';
 import DateFields from '../components/DateFields';
+import { newId } from '../utils/id';
 
 const GIFT_IDEAS: Record<string, string[]> = {
   Photography: ['A roll of film', 'Photo album / scrapbook', 'Camera strap'],
@@ -151,7 +152,7 @@ const FriendProfileScreen: React.FC = () => {
   const submitNote = () => {
     if (!noteText.trim()) return;
     addNote(friend.id, {
-      id: `n_${Date.now()}`,
+      id: newId(),
       content: noteText.trim(),
       createdAt: new Date().toISOString(),
       tag: noteTag,
@@ -189,7 +190,7 @@ const FriendProfileScreen: React.FC = () => {
       });
     } else {
       addImportantDate(friend.id, {
-        id: `d_${Date.now()}`,
+        id: newId(),
         label: dateLabel.trim(),
         type: dateType,
         date: dateISO,

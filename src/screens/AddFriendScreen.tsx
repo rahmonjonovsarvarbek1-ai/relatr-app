@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { RelationshipCategory, ImportantDate } from '../types';
 import DateFields from '../components/DateFields';
+import { newId } from '../utils/id';
 
 const CATEGORIES: RelationshipCategory[] = [
   'Best Friend',
@@ -32,7 +33,7 @@ const CATEGORIES: RelationshipCategory[] = [
 const EMOJIS = ['😊', '🌸', '🎸', '📚', '🏀', '✈️', '🎮', '🎨', '⚽', '🎬', '🐶', '☕', '🌿', '🔥', '💫', '🎧'];
 
 const AddFriendScreen: React.FC = () => {
-  const { friends, addFriend, updateFriend } = useApp();
+  const { friends, addFriend, updateFriend, addImportantDate, updateImportantDate, deleteImportantDate } = useApp();
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const editingFriendId: string | undefined = route.params?.friendId;
@@ -68,24 +69,23 @@ const AddFriendScreen: React.FC = () => {
       .filter(Boolean);
 
     if (isEditing && existingFriend) {
-      let importantDates = existingFriend.importantDates;
       if (hasBirthday) {
         if (existingBirthday) {
-          importantDates = importantDates.map((d) =>
-            d.id === existingBirthday.id ? { ...d, date: birthdayISO, yearKnown: birthdayYearKnown } : d
-          );
+          updateImportantDate(existingFriend.id, existingBirthday.id, {
+            date: birthdayISO,
+            yearKnown: birthdayYearKnown,
+          });
         } else {
-          const newBirthday: ImportantDate = {
-            id: `d_${Date.now()}`,
+          addImportantDate(existingFriend.id, {
+            id: newId(),
             label: 'Birthday',
             type: 'Birthday',
             date: birthdayISO,
             yearKnown: birthdayYearKnown,
-          };
-          importantDates = [...importantDates, newBirthday];
+          });
         }
       } else if (existingBirthday) {
-        importantDates = importantDates.filter((d) => d.id !== existingBirthday.id);
+        deleteImportantDate(existingFriend.id, existingBirthday.id);
       }
 
       updateFriend(existingFriend.id, {
@@ -99,14 +99,13 @@ const AddFriendScreen: React.FC = () => {
         city: city.trim() || undefined,
         school: school.trim() || undefined,
         interests,
-        importantDates,
         reconnectFrequencyDays: reconnectDays ? parseInt(reconnectDays, 10) : undefined,
       });
     } else {
       const importantDates: ImportantDate[] = hasBirthday
         ? [
             {
-              id: `d_${Date.now()}`,
+              id: newId(),
               label: 'Birthday',
               type: 'Birthday',
               date: birthdayISO,
@@ -116,7 +115,7 @@ const AddFriendScreen: React.FC = () => {
         : [];
 
       addFriend({
-        id: `f_${Date.now()}`,
+        id: newId(),
         name: name.trim(),
         nickname: nickname.trim() || undefined,
         avatarColor: color,

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,7 @@ import Chip from '../components/Chip';
 import { Ionicons } from '@expo/vector-icons';
 import { formatFullDate } from '../utils/dateUtils';
 import DateFields from '../components/DateFields';
-import { supabase } from '../utils/supabase';
+import { useAuth } from '../context/AuthContext';
 
 const EMOJIS = ['🌿', '😊', '🌸', '🎸', '📚', '🏀', '✈️', '🎮', '🎨', '☕', '🔥', '💫'];
 
@@ -26,6 +26,7 @@ type SettingsPage = 'main' | 'notifications' | 'calendar' | 'privacy' | 'about';
 
 const ProfileScreen: React.FC = () => {
   const { profile, friends, updateProfile } = useApp();
+  const { signOut } = useAuth();
   const [editing, setEditing] = useState(false);
 
   // ---- Edit profile form state ----
@@ -55,14 +56,6 @@ const ProfileScreen: React.FC = () => {
 
   const [privateAccount, setPrivateAccount] = useState(false);
   const [activityStatus, setActivityStatus] = useState(true);
-
-  useEffect(() => {
-    async function testConnection() {
-      const { data, error } = await supabase.from('profiles').select('*');
-      console.log('Data:', data, 'Error:', error);
-    }
-    testConnection();
-  }, []);
 
   const openEdit = () => {
     setName(profile.name);
@@ -113,6 +106,7 @@ const ProfileScreen: React.FC = () => {
         style: 'destructive',
         onPress: () => {
           closeSettings();
+          signOut();
         },
       },
     ]);
@@ -127,7 +121,20 @@ const ProfileScreen: React.FC = () => {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => {},
+          onPress: () => {
+            // Deleting the underlying auth user requires the service-role
+            // key, which must never live in the client app. This should
+            // call a Supabase Edge Function (created with the service
+            // role) that deletes the user's rows and then the auth user.
+            // Until that function exists, sign the user out so at least
+            // this device stops syncing their data.
+            Alert.alert(
+              'Contact support',
+              'Account deletion requires a quick request to support for now — signing you out.'
+            );
+            closeSettings();
+            signOut();
+          },
         },
       ]
     );

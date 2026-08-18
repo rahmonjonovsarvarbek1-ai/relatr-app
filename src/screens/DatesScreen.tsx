@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -18,13 +18,53 @@ import {
   getAgeTurning,
   MONTH_NAMES,
 } from '../utils/dateUtils';
-import { worldSpecialDays } from '../data/seed';
+import { supabase } from '../utils/supabase';
+import { worldSpecialDayFromRow } from '../utils/mappers';
+import { WorldHolidayRow, WorldSpecialDay } from '../types';
 import { useNavigation } from '@react-navigation/native';
 
 const DatesScreen: React.FC = () => {
   const { friends } = useApp();
   const navigation = useNavigation<any>();
   const [tab, setTab] = useState<'friends' | 'world'>('friends');
+  const [worldSpecialDays, setWorldSpecialDays] = useState<WorldSpecialDay[]>([]);
+
+  // Live-loaded from public.world_holidays (populated by the
+  // google-calendar-sync edge function) with realtime updates so new
+  // holidays appear without a refresh.
+  useEffect(() => {
+    let cancelled = false;
+
+    supabase
+      .from('world_holidays')
+      .select('*')
+      .then(({ data, error }) => {
+        if (cancelled || error || !data) return;
+        setWorldSpecialDays((data as WorldHolidayRow[]).map(worldSpecialDayFromRow));
+      });
+
+    const channel = supabase
+      .channel('world-holidays')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'world_holidays' },
+        () => {
+          supabase
+            .from('world_holidays')
+            .select('*')
+            .then(({ data, error }) => {
+              if (error || !data) return;
+              setWorldSpecialDays((data as WorldHolidayRow[]).map(worldSpecialDayFromRow));
+            });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const friendUpcoming = useMemo(() => {
     const rows: { friendId: string; friendName: string; emoji: string; color: string; label: string; days: number; date: string; age: number | null }[] = [];
@@ -55,7 +95,7 @@ const DatesScreen: React.FC = () => {
         return { ...w, days: daysUntilNextOccurrence(isoGuess), isoGuess };
       })
       .sort((a, b) => a.days - b.days);
-  }, []);
+  }, [worldSpecialDays]);
 
   const soonest = friendUpcoming.slice(0, 3);
 
