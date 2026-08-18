@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,7 @@ import Chip from '../components/Chip';
 import { Ionicons } from '@expo/vector-icons';
 import { formatFullDate } from '../utils/dateUtils';
 import DateFields from '../components/DateFields';
-
+import { supabase } from '../utils/supabase';
 const EMOJIS = ['🌿', '😊', '🌸', '🎸', '📚', '🏀', '✈️', '🎮', '🎨', '☕', '🔥', '💫'];
 
 // Full-screen settings — which "page" is currently shown inside the settings modal
@@ -550,3 +550,11 @@ const styles = StyleSheet.create({
 });
 
 export default ProfileScreen;
+
+useEffect(() => {
+  async function testConnection() {
+    const { data, error } = await supabase.from('profiles').select('*');
+    console.log('Data:', data, 'Error:', error);
+  }
+  testConnection();
+}, []);

@@ -2,7 +2,8 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
-    "moduleResolution": "bundler",
-    "forceConsistentCasingInFileNames": true
+    "types": ["node"],
+    "forceConsistentCasingInFileNames": true,
+    "moduleResolution": "bundler"
   }
 }
