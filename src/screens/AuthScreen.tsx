@@ -5,8 +5,9 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  SafeAreaView,
 } from 'react-native';
+// react-native o'rniga react-native-safe-area-context dan import qilamiz:
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, radius, typography } from '../theme/theme';
 import { useAuth } from '../context/AuthContext';
