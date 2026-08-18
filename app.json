@@ -21,6 +21,15 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Ilova sizga do'stlaringizga rasm qo'shish imkonini berish uchun galereyangizga kirishi kerak."
+        }
+      ]
+    ]
   }
 }
+

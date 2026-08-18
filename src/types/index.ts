@@ -16,6 +16,23 @@ export type ImportantDateType =
   | 'Meet Day'
   | 'Custom';
 
+// ---------------- NEW ----------------
+export type Gender = 'Woman' | 'Man' | 'Non-binary' | 'Prefer not to say' | 'Custom';
+
+export type LoveLanguage =
+  | 'Words of Affirmation'
+  | 'Quality Time'
+  | 'Acts of Service'
+  | 'Gifts'
+  | 'Physical Touch';
+
+export interface SocialLink {
+  id: string;
+  platform: string; // 'Instagram' | 'Snapchat' | 'TikTok' | 'X' | 'LinkedIn' | 'WhatsApp' | 'Other'
+  handle: string;
+}
+// --------------------------------------
+
 export interface ImportantDate {
   id: string;
   label: string;
@@ -49,6 +66,25 @@ export interface Friend {
   reconnectFrequencyDays?: number; // e.g. reconnect every 30 days
   favorite: boolean;
   createdAt: string;
+
+  // ---------------- NEW ----------------
+  photoUri?: string;
+  gender?: Gender;
+  genderCustom?: string;
+  pronouns?: string;
+  email?: string;
+  address?: string;
+  howWeMet?: string;
+  relationshipStartDate?: string; // ISO
+  favoriteFood?: string;
+  allergiesOrDislikes?: string;
+  loveLanguage?: LoveLanguage;
+  giftPreferencesNote?: string;
+  personalityNotes?: string;
+  socialLinks: SocialLink[];
+  isArchived: boolean;
+  updatedAt: string; // ISO
+  // --------------------------------------
 }
 
 export interface UserProfile {
@@ -97,6 +133,23 @@ export interface FriendRow {
   favorite: boolean;
   created_at: string;
   updated_at: string;
+
+  // ---------------- NEW ----------------
+  photo_uri: string | null;
+  gender: Gender | null;
+  gender_custom: string | null;
+  pronouns: string | null;
+  email: string | null;
+  address: string | null;
+  how_we_met: string | null;
+  relationship_start_date: string | null;
+  favorite_food: string | null;
+  allergies_or_dislikes: string | null;
+  love_language: LoveLanguage | null;
+  gift_preferences_note: string | null;
+  personality_notes: string | null;
+  is_archived: boolean;
+  // --------------------------------------
 }
 
 export interface ImportantDateRow {
@@ -118,6 +171,17 @@ export interface NoteRow {
   tag: Note['tag'] | null;
   created_at: string;
 }
+
+// ---------------- NEW ----------------
+export interface SocialLinkRow {
+  id: string;
+  friend_id: string;
+  owner_id: string;
+  platform: string;
+  handle: string;
+  created_at: string;
+}
+// --------------------------------------
 
 export interface ProfileRow {
   id: string;
