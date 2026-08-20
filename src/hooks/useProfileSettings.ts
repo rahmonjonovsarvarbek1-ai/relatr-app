@@ -1,15 +1,11 @@
 // src/hooks/useProfileSettings.ts
-//
-// ProfileScreen uchun barcha "og'ir" backend mantiqini shu hook'ga
-// chiqarib qo'ydim — ekran komponenti faqat UI holatini boshqaradi.
 
 import { useCallback, useEffect, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
-import { decode } from 'base64-arraybuffer';
 import { Alert } from 'react-native';
 import { supabase } from '../utils/supabase';
 import { useAuth } from '../context/AuthContext';
+import { cancelAllScheduledNotificationsAsync } from '../utils/notifications';
 
 export interface BlockedUserSummary {
   id: string;
@@ -45,7 +41,7 @@ export function useProfileSettings() {
   }, [userId, refreshMfaStatus]);
 
   // ---------------------------------------------------------
-  // Profile photo
+  // Profile photo (Web va Mobile uchun moslashtirilgan)
   // ---------------------------------------------------------
   const pickAndUploadAvatar = useCallback(
     async (onDone: (publicUrl: string) => void) => {
@@ -58,11 +54,10 @@ export function useProfileSettings() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'], // Deprecated ogohlantirishini to'g'rilaydi
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
-        base64: false,
       });
 
       if (result.canceled || !result.assets?.[0]) return;
@@ -71,9 +66,9 @@ export function useProfileSettings() {
       setUploadingPhoto(true);
 
       try {
-        const base64 = await FileSystem.readAsStringAsync(asset.uri, {
-          encoding: 'base64',
-        });
+        // FileSystem o'rniga fetch() ishlatilmoqda — Web va Mobilda xatosiz ishlaydi
+        const response = await fetch(asset.uri);
+        const arrayBuffer = await response.arrayBuffer();
 
         const ext = (asset.uri.split('.').pop() || 'jpg').toLowerCase();
         const mime =
@@ -82,7 +77,7 @@ export function useProfileSettings() {
 
         const { error: uploadError } = await supabase.storage
           .from('avatars')
-          .upload(path, decode(base64), {
+          .upload(path, arrayBuffer, {
             contentType: mime,
             upsert: true,
           });
@@ -246,21 +241,14 @@ export function useProfileSettings() {
         .eq('blocked_id', blockedId);
       if (error) {
         console.error('unblockUser error:', error.message);
-        loadBlockedUsers(); // rollback on failure
+        loadBlockedUsers();
       }
     },
     [userId, loadBlockedUsers]
   );
 
   // ---------------------------------------------------------
-  // Contacts / Calendar sync toggles (real device permission)
-  //
-  // require() bilan lazy-load qilinadi, shunda bu modullar hali
-  // o'rnatilmagan yoki tur e'lonlari topilmagan bo'lsa ham,
-  // hook faylining o'zi TypeScript tomonidan xatosiz kompilyatsiya
-  // qilinadi (xato faqat funksiya chaqirilganda, runtime'da bo'ladi).
-  // Ikkalasini ham `npx expo install expo-contacts expo-calendar`
-  // bilan o'rnatib qo'ying — shunda hech qanday xato chiqmaydi.
+  // Contacts / Calendar sync toggles
   // ---------------------------------------------------------
   const requestContactsSync = useCallback(async (): Promise<boolean> => {
     const Contacts = require('expo-contacts');
@@ -280,6 +268,7 @@ export function useProfileSettings() {
   const deleteAccount = useCallback(async (): Promise<{ error?: string }> => {
     const { error } = await supabase.rpc('delete_own_account');
     if (error) return { error: error.message };
+    cancelAllScheduledNotificationsAsync();
     return {};
   }, []);
 

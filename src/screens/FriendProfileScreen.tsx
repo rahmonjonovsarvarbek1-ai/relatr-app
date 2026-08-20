@@ -83,6 +83,7 @@ const FriendProfileScreen: React.FC = () => {
     addImportantDate,
     updateImportantDate,
     deleteImportantDate,
+    setSocialLinks: saveSocialLinks,
     markContacted,
     toggleFavorite,
   } = useApp();
@@ -384,8 +385,6 @@ const FriendProfileScreen: React.FC = () => {
       email: email.trim() || undefined,
       address: address.trim() || undefined,
 
-      socialLinks,
-
       favoriteFood: favoriteFood.trim() || undefined,
       allergiesOrDislikes: allergiesOrDislikes.trim() || undefined,
       loveLanguage,
@@ -394,6 +393,7 @@ const FriendProfileScreen: React.FC = () => {
 
       updatedAt: new Date().toISOString(),
     });
+    saveSocialLinks(friend.id, socialLinks);
     setEditing(false);
   };
 

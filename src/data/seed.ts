@@ -47,6 +47,9 @@ export const seedFriends: Friend[] = [
     reconnectFrequencyDays: 14,
     favorite: true,
     createdAt: daysAgo(600),
+    socialLinks: [{ id: 'sl1', platform: 'Instagram', handle: '@ameliaxo' }],
+    isArchived: false,
+    updatedAt: daysAgo(3),
   },
   {
     id: 'f2',
@@ -73,6 +76,9 @@ export const seedFriends: Friend[] = [
     reconnectFrequencyDays: 30,
     favorite: true,
     createdAt: daysAgo(500),
+    socialLinks: [],
+    isArchived: false,
+    updatedAt: daysAgo(500),
   },
   {
     id: 'f3',
@@ -97,6 +103,9 @@ export const seedFriends: Friend[] = [
     reconnectFrequencyDays: 45,
     favorite: false,
     createdAt: daysAgo(200),
+    socialLinks: [],
+    isArchived: false,
+    updatedAt: daysAgo(200),
   },
   {
     id: 'f4',
@@ -123,6 +132,9 @@ export const seedFriends: Friend[] = [
     reconnectFrequencyDays: 7,
     favorite: true,
     createdAt: daysAgo(365),
+    socialLinks: [],
+    isArchived: false,
+    updatedAt: daysAgo(365),
   },
   {
     id: 'f5',
@@ -148,6 +160,9 @@ export const seedFriends: Friend[] = [
     reconnectFrequencyDays: 30,
     favorite: false,
     createdAt: daysAgo(400),
+    socialLinks: [],
+    isArchived: false,
+    updatedAt: daysAgo(400),
   },
   {
     id: 'f6',
@@ -163,6 +178,9 @@ export const seedFriends: Friend[] = [
     reconnectFrequencyDays: 60,
     favorite: false,
     createdAt: daysAgo(150),
+    socialLinks: [],
+    isArchived: false,
+    updatedAt: daysAgo(150),
   },
 ];
 
@@ -178,6 +196,16 @@ export const seedProfile: UserProfile = {
   school: 'UT Austin',
   instagram: '@alex.rivera',
   interests: ['Design', 'Basketball', 'Vinyl records'],
+  pushEnabled: true,
+  messageNotif: true,
+  likesNotif: true,
+  soundEnabled: true,
+  syncContacts: false,
+  syncCalendar: false,
+  privateAccount: false,
+  activityStatus: true,
+  blockedUserIds: [],
+  mfaEnabled: false,
 };
 
 export const worldSpecialDays: WorldSpecialDay[] = [

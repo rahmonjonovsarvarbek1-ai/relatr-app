@@ -1,12 +1,9 @@
 import { supabase } from './supabase';
-import { decode } from 'base64-arraybuffer';
 
 /**
  * Uploads a local image URI (from ImagePicker) to the "friend-photos"
  * Supabase Storage bucket and returns the public URL.
- *
- * Requires: expo install expo-file-system base64-arraybuffer
- * Requires a public Storage bucket named "friend-photos" to exist in Supabase.
+ * Works seamlessly on both Mobile and Web platforms.
  */
 export async function uploadFriendPhoto(localUri: string, ownerId: string): Promise<string | null> {
   try {

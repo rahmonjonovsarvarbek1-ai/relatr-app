@@ -29,7 +29,14 @@
           "photosPermission": "Ilova sizga do'stlaringizga rasm qo'shish imkonini berish uchun galereyangizga kirishi kerak."
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#8B5FE0"
+        }
+      ]
     ]
   }
 }

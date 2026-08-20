@@ -24,34 +24,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { formatFullDate } from '../utils/dateUtils';
 import DateFields from '../components/DateFields';
 import { useAuth } from '../context/AuthContext';
+import { useProfileSettings } from '../hooks/useProfileSettings';
+import { requestNotificationPermissionsAsync } from '../utils/notifications';
 
 type BlockedUserSummary = { id: string; name: string; username: string };
-type SettingsResult = {
-  error?: string;
-  factorId?: string;
-  qrCodeSvg?: string;
-  secret?: string;
-};
-
-// The settings hook is not available in this project; keep the screen buildable
-// while preserving the settings API expected by the UI.
-const useProfileSettings = () => ({
-  uploadingPhoto: false,
-  blockedLoading: false,
-  blockedUsers: [] as BlockedUserSummary[],
-  mfaLoading: false,
-  loadBlockedUsers: () => undefined,
-  pickAndUploadAvatar: (_onUploaded: (publicUrl: string) => void) => undefined,
-  removeAvatar: (_onRemoved: () => void) => undefined,
-  requestContactsSync: async () => true,
-  requestCalendarSync: async () => true,
-  startMfaEnrollment: async (): Promise<SettingsResult> => ({ error: 'Unavailable' }),
-  verifyMfaEnrollment: async (_factorId: string, _code: string): Promise<SettingsResult> => ({ error: 'Unavailable' }),
-  disableMfa: async (): Promise<SettingsResult> => ({ error: 'Unavailable' }),
-  changePassword: async (_password: string): Promise<SettingsResult> => ({ error: 'Unavailable' }),
-  deleteAccount: async (): Promise<SettingsResult> => ({ error: 'Unavailable' }),
-  unblockUser: (_id: string) => undefined,
-});
 
 const EMOJIS = ['🌿', '😊', '🌸', '🎸', '📚', '🏀', '✈️', '🎮', '🎨', '☕', '🔥', '💫'];
 
@@ -224,7 +200,19 @@ const ProfileScreen: React.FC = () => {
   };
 
   // ---- Notification / privacy / sync toggles (all write straight to Supabase via updateProfile) ----
-  const setPushEnabled = (v: boolean) => updateProfile({ pushEnabled: v });
+  const setPushEnabled = async (v: boolean) => {
+    if (v) {
+      const granted = await requestNotificationPermissionsAsync();
+      if (!granted) {
+        Alert.alert(
+          'Notifications disabled',
+          'Please enable notifications for Relatr in your device Settings to get birthday reminders.'
+        );
+        return;
+      }
+    }
+    updateProfile({ pushEnabled: v });
+  };
   const setMessageNotif = (v: boolean) => updateProfile({ messageNotif: v });
   const setLikesNotif = (v: boolean) => updateProfile({ likesNotif: v });
   const setSoundEnabled = (v: boolean) => updateProfile({ soundEnabled: v });
