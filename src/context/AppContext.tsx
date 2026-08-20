@@ -49,7 +49,30 @@ const emptyProfile = (id: string): UserProfile => ({
   emoji: '🌿',
   avatarColor: '#8B5FE0',
   interests: [],
+  pushEnabled: true,
+  messageNotif: true,
+  likesNotif: true,
+  soundEnabled: true,
+  syncContacts: false,
+  syncCalendar: false,
+  privateAccount: false,
+  activityStatus: true,
+  blockedUserIds: [],
+  mfaEnabled: false,
 });
+
+// MFA holatini Supabase Auth'dan olib kelish uchun kichik yordamchi.
+// Har bir profil yuklanganda / realtime orqali yangilanganda chaqiriladi,
+// chunki mfa_factors auth sxemasida yashaydi va profiles jadvaliga
+// tegishli emas.
+async function fetchMfaEnabled(): Promise<boolean> {
+  const { data, error } = await supabase.auth.mfa.listFactors();
+  if (error) {
+    console.error('listFactors error:', error.message);
+    return false;
+  }
+  return (data?.totp ?? []).some((f) => f.status === 'verified');
+}
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { session } = useAuth();
@@ -59,12 +82,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [profile, setProfile] = useState<UserProfile>(() => emptyProfile(''));
   const [loading, setLoading] = useState(true);
 
-  // Raw row caches so realtime patches (which only give us one row at a
-  // time) can be merged back into full Friend objects without refetching
-  // everything.
   const friendRows = useRef<Map<string, FriendRow>>(new Map());
-  const noteRows = useRef<Map<string, NoteRow[]>>(new Map()); // friendId -> notes
-  const dateRows = useRef<Map<string, ImportantDateRow[]>>(new Map()); // friendId -> dates
+  const noteRows = useRef<Map<string, NoteRow[]>>(new Map());
+  const dateRows = useRef<Map<string, ImportantDateRow[]>>(new Map());
 
   const rebuildFriends = useCallback(() => {
     const list: Friend[] = Array.from(friendRows.current.values())
@@ -75,9 +95,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setFriends(list);
   }, []);
 
-  // ---------------------------------------------------------------------
-  // Initial load + realtime subscriptions
-  // ---------------------------------------------------------------------
   useEffect(() => {
     if (!userId) {
       friendRows.current.clear();
@@ -93,11 +110,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setLoading(true);
 
     (async () => {
-      const [friendsRes, notesRes, datesRes, profileRes] = await Promise.all([
+      const [friendsRes, notesRes, datesRes, profileRes, mfaEnabled] = await Promise.all([
         supabase.from('friends').select('*').eq('owner_id', userId),
         supabase.from('notes').select('*').eq('owner_id', userId),
         supabase.from('important_dates').select('*').eq('owner_id', userId),
         supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
+        fetchMfaEnabled(),
       ]);
 
       if (cancelled) return;
@@ -126,7 +144,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       if (profileRes.data) {
-        setProfile(profileFromRow(profileRes.data as ProfileRow));
+        setProfile({ ...profileFromRow(profileRes.data as ProfileRow), mfaEnabled });
       } else {
         setProfile(emptyProfile(userId));
       }
@@ -135,7 +153,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setLoading(false);
     })();
 
-    // -- Realtime subscriptions ------------------------------------------------
     const channel = supabase
       .channel(`app-data-${userId}`)
       .on(
@@ -205,9 +222,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${userId}` },
-        (payload) => {
+        async (payload) => {
           if (payload.eventType !== 'DELETE') {
-            setProfile(profileFromRow(payload.new as ProfileRow));
+            const mfaEnabled = await fetchMfaEnabled();
+            setProfile({ ...profileFromRow(payload.new as ProfileRow), mfaEnabled });
           }
         }
       )
@@ -218,13 +236,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supabase.removeChannel(channel);
     };
   }, [userId, rebuildFriends]);
-
-  // ---------------------------------------------------------------------
-  // Mutations — all optimistic: update local caches immediately, then
-  // write through to Supabase. The realtime subscription above will
-  // reconcile with the server's version shortly after (including for
-  // any other device signed into the same account).
-  // ---------------------------------------------------------------------
 
   const addFriend = useCallback(
     (friend: Friend) => {
@@ -246,8 +257,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             console.error('addFriend error:', error.message);
             return;
           }
-          // Persist any importantDates/notes that came bundled on creation
-          // (e.g. a birthday added from the Add Friend form).
           if (friend.importantDates.length) {
             await supabase
               .from('important_dates')
@@ -291,7 +300,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       noteRows.current.delete(id);
       dateRows.current.delete(id);
       rebuildFriends();
-      // important_dates and notes cascade-delete in Postgres via FK.
       supabase
         .from('friends')
         .delete()

@@ -16,10 +16,10 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-// Expo Go va Standalone ilovalar uchun dynamically redirect URI yaratish
+// TUZATILGAN KOD:
 const redirectTo = AuthSession.makeRedirectUri({
   scheme: 'relatr',
-  path: 'auth-callback',
+  preferLocalhost: true,
 });
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -84,8 +84,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
+  // TUZATILGAN signOut FUNKSIYASI:
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.error('SignOut error:', e);
+    } finally {
+      // Supabase xato bergan bo'lsa ham UI'ni darhol Login ekraniga o'tkazish
+      setSession(null);
+    }
   }, []);
 
   return (

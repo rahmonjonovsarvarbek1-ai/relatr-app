@@ -34,12 +34,14 @@ const CATEGORIES: (RelationshipCategory | 'All')[] = [
 type SortMode = 'recent' | 'name' | 'upcoming';
 
 const FriendsListScreen: React.FC = () => {
-  const { friends } = useApp();
+  const { friends, updateFriend } = useApp();
   const navigation = useNavigation<any>();
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState<(RelationshipCategory | 'All')>('All');
+  const [category, setCategory] = useState<RelationshipCategory | 'All'>('All');
   const [sortMode, setSortMode] = useState<SortMode>('recent');
   const [showArchived, setShowArchived] = useState(false);
+
+  const archivedCount = useMemo(() => friends.filter((f) => f.isArchived).length, [friends]);
 
   const visibleFriends = useMemo(
     () => friends.filter((f) => (showArchived ? true : !f.isArchived)),
@@ -61,6 +63,7 @@ const FriendsListScreen: React.FC = () => {
       });
 
     return list.sort((a, b) => {
+      if (a.isArchived !== b.isArchived) return a.isArchived ? 1 : -1;
       if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
 
       if (sortMode === 'name') return a.name.localeCompare(b.name);
@@ -77,7 +80,6 @@ const FriendsListScreen: React.FC = () => {
         return nextA - nextB;
       }
 
-      // recent (default): least-recently-contacted first, no-contact-yet last
       const sinceA = daysSince(a.lastContacted);
       const sinceB = daysSince(b.lastContacted);
       if (sinceA === null && sinceB === null) return a.name.localeCompare(b.name);
@@ -89,6 +91,7 @@ const FriendsListScreen: React.FC = () => {
 
   const needsReconnect = useMemo(() => {
     return visibleFriends.filter((f) => {
+      if (f.isArchived) return false;
       if (!f.reconnectFrequencyDays) return false;
       const since = daysSince(f.lastContacted);
       return since !== null && since >= f.reconnectFrequencyDays;
@@ -97,6 +100,7 @@ const FriendsListScreen: React.FC = () => {
 
   const upcomingBirthdays = useMemo(() => {
     return visibleFriends
+      .filter((f) => !f.isArchived)
       .flatMap((f) =>
         f.importantDates
           .filter((d) => d.type === 'Birthday')
@@ -105,6 +109,10 @@ const FriendsListScreen: React.FC = () => {
       .filter((x) => x.days <= 14)
       .sort((a, b) => a.days - b.days);
   }, [visibleFriends]);
+
+  const unarchive = (id: string) => {
+    updateFriend(id, { isArchived: false, updatedAt: new Date().toISOString() });
+  };
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -115,7 +123,11 @@ const FriendsListScreen: React.FC = () => {
             {visibleFriends.length} {visibleFriends.length === 1 ? 'person' : 'people'} you care about
           </Text>
         </View>
-        <TouchableOpacity style={styles.addBtn} onPress={() => navigation.navigate('AddFriend')}>
+        <TouchableOpacity
+          style={styles.addBtn}
+          onPress={() => navigation.navigate('AddFriend')}
+          activeOpacity={0.85}
+        >
           <Ionicons name="add" size={26} color={colors.bg} />
         </TouchableOpacity>
       </View>
@@ -136,16 +148,19 @@ const FriendsListScreen: React.FC = () => {
         )}
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.categoryScroll}
-        contentContainerStyle={{ paddingHorizontal: spacing.lg }}
-      >
-        {CATEGORIES.map((c) => (
-          <Chip key={c} label={c} active={category === c} onPress={() => setCategory(c)} />
-        ))}
-      </ScrollView>
+      {/* TUZATILGAN KATEGORIYA SCROLLVIEW QISMI */}
+      <View style={styles.categoryContainer}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.categoryScroll}
+          contentContainerStyle={styles.categoryScrollContent}
+        >
+          {CATEGORIES.map((c) => (
+            <Chip key={c} label={c} active={category === c} onPress={() => setCategory(c)} />
+          ))}
+        </ScrollView>
+      </View>
 
       <View style={styles.sortRow}>
         <View style={{ flexDirection: 'row' }}>
@@ -153,17 +168,29 @@ const FriendsListScreen: React.FC = () => {
           <SortPill label="A–Z" active={sortMode === 'name'} onPress={() => setSortMode('name')} />
           <SortPill label="Upcoming" active={sortMode === 'upcoming'} onPress={() => setSortMode('upcoming')} />
         </View>
-        <TouchableOpacity onPress={() => setShowArchived((v) => !v)} style={styles.archiveToggle}>
-          <Ionicons
-            name={showArchived ? 'eye-outline' : 'eye-off-outline'}
-            size={14}
-            color={colors.textFaint}
-          />
-          <Text style={styles.archiveToggleText}>{showArchived ? 'Hide archived' : 'Show archived'}</Text>
-        </TouchableOpacity>
+        {archivedCount > 0 && (
+          <TouchableOpacity
+            onPress={() => setShowArchived((v) => !v)}
+            style={styles.archiveToggle}
+            hitSlop={8}
+          >
+            <Ionicons
+              name={showArchived ? 'eye-outline' : 'eye-off-outline'}
+              size={14}
+              color={colors.textFaint}
+            />
+            <Text style={styles.archiveToggleText}>
+              {showArchived ? 'Hide archived' : `Show archived (${archivedCount})`}
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+      >
         {upcomingBirthdays.length > 0 && category === 'All' && !query && (
           <View style={styles.birthdayBanner}>
             <Ionicons name="gift" size={16} color={colors.gold} />
@@ -187,7 +214,11 @@ const FriendsListScreen: React.FC = () => {
 
         {filtered.map((f) => {
           const since = daysSince(f.lastContacted);
-          const overdue = f.reconnectFrequencyDays && since !== null && since >= f.reconnectFrequencyDays;
+          const overdue =
+            !f.isArchived &&
+            f.reconnectFrequencyDays &&
+            since !== null &&
+            since >= f.reconnectFrequencyDays;
           const nextBday = f.importantDates.find((d) => d.type === 'Birthday');
           const bdayDays = nextBday ? daysUntilNextOccurrence(nextBday.date) : null;
 
@@ -205,33 +236,54 @@ const FriendsListScreen: React.FC = () => {
               )}
               <View style={{ flex: 1, marginLeft: spacing.md }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <Text style={styles.friendName}>{f.name}</Text>
+                  <Text style={styles.friendName} numberOfLines={1}>
+                    {f.name}
+                  </Text>
                   {f.favorite && (
                     <Ionicons name="star" size={13} color={colors.gold} style={{ marginLeft: 6 }} />
                   )}
-                  {f.isArchived && <Text style={styles.archivedTag}>Archived</Text>}
+                  {f.isArchived && (
+                    <View style={styles.archivedTag}>
+                      <Text style={styles.archivedTagText}>Archived</Text>
+                    </View>
+                  )}
                 </View>
-                <Text style={styles.friendMeta}>
+                <Text style={styles.friendMeta} numberOfLines={1}>
                   {f.category}
                   {f.city ? ` · ${f.city}` : ''}
                 </Text>
-                {bdayDays !== null && bdayDays <= 14 && (
+                {!f.isArchived && bdayDays !== null && bdayDays <= 14 && (
                   <Text style={styles.bdaySoon}>
                     🎂 {bdayDays === 0 ? 'Birthday today!' : `Birthday in ${bdayDays}d`}
                   </Text>
                 )}
               </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={[styles.lastContact, overdue ? { color: colors.gold } : null]}>
-                  {f.lastContacted ? formatTimeAgo(f.lastContacted) : 'No contact yet'}
-                </Text>
-                {overdue && <Text style={styles.overdueTag}>Reconnect →</Text>}
-              </View>
+              {f.isArchived ? (
+                <TouchableOpacity
+                  onPress={() => unarchive(f.id)}
+                  style={styles.unarchiveBtn}
+                  hitSlop={8}
+                >
+                  <Ionicons name="arrow-undo-outline" size={14} color={colors.textDim} />
+                  <Text style={styles.unarchiveBtnText}>Restore</Text>
+                </TouchableOpacity>
+              ) : (
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={[styles.lastContact, overdue ? styles.lastContactOverdue : null]}>
+                    {f.lastContacted ? formatTimeAgo(f.lastContacted) : 'No contact yet'}
+                  </Text>
+                  {overdue && <Text style={styles.overdueTag}>Reconnect →</Text>}
+                </View>
+              )}
             </TouchableOpacity>
           );
         })}
         {filtered.length === 0 && (
-          <Text style={styles.empty}>No friends found. Try a different search or category.</Text>
+          <Text style={styles.empty}>
+            {showArchived
+              ? 'No friends found. Try a different search or category.'
+              : 'No active friends found. Try a different search, category, or show archived.'}
+          </Text>
         )}
         <View style={{ height: spacing.xxl }} />
       </ScrollView>
@@ -244,7 +296,11 @@ const SortPill: React.FC<{ label: string; active: boolean; onPress: () => void }
   active,
   onPress,
 }) => (
-  <TouchableOpacity onPress={onPress} style={[styles.sortPill, active && styles.sortPillActive]}>
+  <TouchableOpacity
+    onPress={onPress}
+    style={[styles.sortPill, active && styles.sortPillActive]}
+    activeOpacity={0.8}
+  >
     <Text style={[styles.sortPillText, active && styles.sortPillTextActive]}>{label}</Text>
   </TouchableOpacity>
 );
@@ -274,6 +330,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.cardAlt,
     marginHorizontal: spacing.lg,
     marginTop: spacing.md,
+    marginBottom: spacing.xs,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
     borderWidth: 1,
@@ -282,17 +339,27 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     color: colors.text,
-    paddingVertical: spacing.sm + 4,
+    paddingVertical: spacing.sm + 2,
     paddingLeft: spacing.sm,
     ...typography.body,
   },
-  categoryScroll: { marginTop: spacing.md, flexGrow: 0 },
+  categoryContainer: {
+    marginVertical: spacing.xs,
+  },
+  categoryScroll: {
+    flexGrow: 0,
+  },
+  categoryScrollContent: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xs, // Chip-lar balandligi qirqilmasligi uchun
+    alignItems: 'center',
+  },
   sortRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: spacing.lg,
-    marginTop: spacing.sm,
+    marginVertical: spacing.xs,
   },
   sortPill: {
     paddingHorizontal: spacing.sm + 2,
@@ -331,25 +398,37 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: spacing.sm + 4,
-    borderBottomWidth: 1,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-  friendRowArchived: { opacity: 0.5 },
+  friendRowArchived: { opacity: 0.55 },
   photoAvatar: { width: 50, height: 50, borderRadius: 25, backgroundColor: colors.cardAlt },
-  friendName: { ...typography.bodyBold, color: colors.text },
+  friendName: { ...typography.bodyBold, color: colors.text, maxWidth: 160 },
   archivedTag: {
-    ...typography.small,
-    color: colors.textFaint,
     marginLeft: spacing.xs,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.pill,
     paddingHorizontal: 6,
+    paddingVertical: 1,
   },
+  archivedTagText: { ...typography.small, color: colors.textFaint },
   friendMeta: { ...typography.caption, color: colors.textFaint, marginTop: 2 },
   bdaySoon: { ...typography.small, color: colors.gold, marginTop: 2, fontWeight: '600' },
   lastContact: { ...typography.small, color: colors.textFaint },
+  lastContactOverdue: { color: colors.gold },
   overdueTag: { ...typography.small, color: colors.gold, fontWeight: '700', marginTop: 2 },
+  unarchiveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.cardAlt,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+  },
+  unarchiveBtnText: { ...typography.small, color: colors.textDim, fontWeight: '600', marginLeft: 4 },
   empty: { ...typography.body, color: colors.textFaint, marginTop: spacing.lg, textAlign: 'center' },
 });
 

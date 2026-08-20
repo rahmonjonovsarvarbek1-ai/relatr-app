@@ -7,11 +7,12 @@ import {
   TouchableOpacity,
   SafeAreaView,
   TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import { useApp } from '../context/AppContext';
 import { colors, radius, spacing, typography, avatarPalette } from '../theme/theme';
-import Avatar from '../components/Avatar';
 import Chip from '../components/Chip';
+import AvatarPicker from '../components/AvatarPicker';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { RelationshipCategory, ImportantDate } from '../types';
@@ -48,6 +49,7 @@ const AddFriendScreen: React.FC = () => {
   const [category, setCategory] = useState<RelationshipCategory>(existingFriend?.category ?? 'Friend');
   const [emoji, setEmoji] = useState(existingFriend?.emoji ?? '😊');
   const [color, setColor] = useState(existingFriend?.avatarColor ?? avatarPalette[0]);
+  const [photoUri, setPhotoUri] = useState<string | undefined>(existingFriend?.photoUri);
   const [city, setCity] = useState(existingFriend?.city ?? '');
   const [school, setSchool] = useState(existingFriend?.school ?? '');
   const [phone, setPhone] = useState(existingFriend?.phone ?? '');
@@ -56,117 +58,141 @@ const AddFriendScreen: React.FC = () => {
   const [reconnectDays, setReconnectDays] = useState(
     existingFriend?.reconnectFrequencyDays ? String(existingFriend.reconnectFrequencyDays) : '30'
   );
+  const [isArchived, setIsArchived] = useState(existingFriend?.isArchived ?? false);
 
   const [hasBirthday, setHasBirthday] = useState(!!existingBirthday);
   const [birthdayISO, setBirthdayISO] = useState(existingBirthday?.date ?? new Date().toISOString());
   const [birthdayYearKnown, setBirthdayYearKnown] = useState(existingBirthday?.yearKnown ?? false);
 
-  const handleSave = () => {
-    if (!name.trim()) return;
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!name.trim() || saving) return;
+    setSaving(true);
 
     const interests = interestsText
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
 
-    if (isEditing && existingFriend) {
-      // Keep the friend's importantDates list (source of truth for birthdays,
-      // same as FriendProfileScreen) in sync with the toggle/fields above.
-      if (hasBirthday) {
-        if (existingBirthday) {
-          updateImportantDate(existingFriend.id, existingBirthday.id, {
-            date: birthdayISO,
-            yearKnown: birthdayYearKnown,
-          });
-        } else {
-          addImportantDate(existingFriend.id, {
-            id: newId(),
-            label: 'Birthday',
-            type: 'Birthday',
-            date: birthdayISO,
-            yearKnown: birthdayYearKnown,
-          });
-        }
-      } else if (existingBirthday) {
-        deleteImportantDate(existingFriend.id, existingBirthday.id);
-      }
-
-      updateFriend(existingFriend.id, {
-        name: name.trim(),
-        nickname: nickname.trim() || undefined,
-        avatarColor: color,
-        emoji,
-        category,
-        phone: phone.trim() || undefined,
-        instagram: instagram.trim() || undefined,
-        city: city.trim() || undefined,
-        school: school.trim() || undefined,
-        interests,
-        reconnectFrequencyDays: reconnectDays ? parseInt(reconnectDays, 10) : undefined,
-        updatedAt: new Date().toISOString(),
-      });
-    } else {
-      const importantDates: ImportantDate[] = hasBirthday
-        ? [
-            {
+    try {
+      if (isEditing && existingFriend) {
+        // Keep the friend's importantDates list (source of truth for birthdays,
+        // same as FriendProfileScreen) in sync with the toggle/fields above.
+        if (hasBirthday) {
+          if (existingBirthday) {
+            updateImportantDate(existingFriend.id, existingBirthday.id, {
+              date: birthdayISO,
+              yearKnown: birthdayYearKnown,
+            });
+          } else {
+            addImportantDate(existingFriend.id, {
               id: newId(),
               label: 'Birthday',
               type: 'Birthday',
               date: birthdayISO,
               yearKnown: birthdayYearKnown,
-            },
-          ]
-        : [];
+            });
+          }
+        } else if (existingBirthday) {
+          deleteImportantDate(existingFriend.id, existingBirthday.id);
+        }
 
-      addFriend({
-        id: newId(),
-        name: name.trim(),
-        nickname: nickname.trim() || undefined,
-        avatarColor: color,
-        emoji,
-        category,
-        phone: phone.trim() || undefined,
-        instagram: instagram.trim() || undefined,
-        city: city.trim() || undefined,
-        school: school.trim() || undefined,
-        interests,
-        importantDates,
-        notes: [],
-        lastContacted: undefined,
-        reconnectFrequencyDays: reconnectDays ? parseInt(reconnectDays, 10) : undefined,
-        favorite: false,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        socialLinks: [],
-        isArchived: false,
-      });
+        updateFriend(existingFriend.id, {
+          name: name.trim(),
+          nickname: nickname.trim() || undefined,
+          avatarColor: color,
+          emoji,
+          photoUri,
+          category,
+          phone: phone.trim() || undefined,
+          instagram: instagram.trim() || undefined,
+          city: city.trim() || undefined,
+          school: school.trim() || undefined,
+          interests,
+          reconnectFrequencyDays: reconnectDays ? parseInt(reconnectDays, 10) : undefined,
+          isArchived,
+          updatedAt: new Date().toISOString(),
+        });
+      } else {
+        const importantDates: ImportantDate[] = hasBirthday
+          ? [
+              {
+                id: newId(),
+                label: 'Birthday',
+                type: 'Birthday',
+                date: birthdayISO,
+                yearKnown: birthdayYearKnown,
+              },
+            ]
+          : [];
+
+        addFriend({
+          id: newId(),
+          name: name.trim(),
+          nickname: nickname.trim() || undefined,
+          avatarColor: color,
+          emoji,
+          photoUri,
+          category,
+          phone: phone.trim() || undefined,
+          instagram: instagram.trim() || undefined,
+          city: city.trim() || undefined,
+          school: school.trim() || undefined,
+          interests,
+          importantDates,
+          notes: [],
+          lastContacted: undefined,
+          reconnectFrequencyDays: reconnectDays ? parseInt(reconnectDays, 10) : undefined,
+          favorite: false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          socialLinks: [],
+          isArchived: false,
+        });
+      }
+
+      // This was the missing piece: without navigating away, the screen
+      // just sat there after Save with no visible confirmation.
+      navigation.goBack();
+    } finally {
+      setSaving(false);
     }
-    
   };
+
+  const canSave = !!name.trim() && !saving;
 
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.topBar}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={10}>
           <Ionicons name="close" size={26} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.topTitle}>{isEditing ? 'Edit Friend' : 'New Friend'}</Text>
-        <TouchableOpacity onPress={handleSave}>
-          <Text style={[styles.saveText, !name.trim() && { color: colors.textFaint }]}>Save</Text>
+        <TouchableOpacity onPress={handleSave} disabled={!canSave} hitSlop={10}>
+          {saving ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Text style={[styles.saveText, !canSave && styles.saveTextDisabled]}>Save</Text>
+          )}
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={{ alignItems: 'center', marginBottom: spacing.lg }}>
-          <Avatar emoji={emoji} color={color} size={80} />
+          <AvatarPicker photoUri={photoUri} emoji={emoji} color={color} size={88} onChangePhoto={setPhotoUri} />
         </View>
 
-        <Text style={styles.label}>Emoji</Text>
+        <Text style={styles.label}>Emoji (used if no photo)</Text>
         <View style={styles.wrapRow}>
           {EMOJIS.map((e) => (
             <TouchableOpacity
               key={e}
-              style={[styles.emojiOption, emoji === e && { borderColor: colors.primary, backgroundColor: colors.primary + '20' }]}
+              style={[styles.emojiOption, emoji === e && styles.emojiOptionActive]}
               onPress={() => setEmoji(e)}
             >
               <Text style={{ fontSize: 22 }}>{e}</Text>
@@ -180,20 +206,28 @@ const AddFriendScreen: React.FC = () => {
             <TouchableOpacity
               key={c}
               onPress={() => setColor(c)}
-              style={[
-                styles.colorOption,
-                { backgroundColor: c },
-                color === c && { borderWidth: 3, borderColor: colors.text },
-              ]}
+              style={[styles.colorOption, { backgroundColor: c }, color === c && styles.colorOptionActive]}
             />
           ))}
         </View>
 
         <Text style={styles.label}>Name *</Text>
-        <TextInput style={styles.input} placeholder="Full name" placeholderTextColor={colors.textFaint} value={name} onChangeText={setName} />
+        <TextInput
+          style={styles.input}
+          placeholder="Full name"
+          placeholderTextColor={colors.textFaint}
+          value={name}
+          onChangeText={setName}
+        />
 
         <Text style={styles.label}>Nickname</Text>
-        <TextInput style={styles.input} placeholder="Optional" placeholderTextColor={colors.textFaint} value={nickname} onChangeText={setNickname} />
+        <TextInput
+          style={styles.input}
+          placeholder="Optional"
+          placeholderTextColor={colors.textFaint}
+          value={nickname}
+          onChangeText={setNickname}
+        />
 
         <Text style={styles.label}>Relationship</Text>
         <View style={styles.wrapRow}>
@@ -225,8 +259,6 @@ const AddFriendScreen: React.FC = () => {
                 setBirthdayYearKnown(known);
               }}
             />
-            {/* Live preview — mirrors the age badge shown in FriendProfileScreen's
-                edit sheet, so birthdays feel consistent across both screens. */}
             {birthdayYearKnown && getAgeTurning(birthdayISO) != null ? (
               <View style={styles.ageBadge}>
                 <Ionicons name="balloon-outline" size={14} color={colors.primary} />
@@ -246,16 +278,42 @@ const AddFriendScreen: React.FC = () => {
         )}
 
         <Text style={styles.label}>City</Text>
-        <TextInput style={styles.input} placeholder="e.g. Austin, TX" placeholderTextColor={colors.textFaint} value={city} onChangeText={setCity} />
+        <TextInput
+          style={styles.input}
+          placeholder="e.g. Austin, TX"
+          placeholderTextColor={colors.textFaint}
+          value={city}
+          onChangeText={setCity}
+        />
 
         <Text style={styles.label}>School</Text>
-        <TextInput style={styles.input} placeholder="e.g. UT Austin" placeholderTextColor={colors.textFaint} value={school} onChangeText={setSchool} />
+        <TextInput
+          style={styles.input}
+          placeholder="e.g. UT Austin"
+          placeholderTextColor={colors.textFaint}
+          value={school}
+          onChangeText={setSchool}
+        />
 
         <Text style={styles.label}>Phone</Text>
-        <TextInput style={styles.input} placeholder="Optional" placeholderTextColor={colors.textFaint} value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
+        <TextInput
+          style={styles.input}
+          placeholder="Optional"
+          placeholderTextColor={colors.textFaint}
+          value={phone}
+          onChangeText={setPhone}
+          keyboardType="phone-pad"
+        />
 
         <Text style={styles.label}>Instagram</Text>
-        <TextInput style={styles.input} placeholder="@username" placeholderTextColor={colors.textFaint} value={instagram} onChangeText={setInstagram} autoCapitalize="none" />
+        <TextInput
+          style={styles.input}
+          placeholder="@username"
+          placeholderTextColor={colors.textFaint}
+          value={instagram}
+          onChangeText={setInstagram}
+          autoCapitalize="none"
+        />
 
         <Text style={styles.label}>Interests</Text>
         <TextInput
@@ -276,6 +334,31 @@ const AddFriendScreen: React.FC = () => {
           keyboardType="number-pad"
         />
 
+        {isEditing && (
+          <>
+            <Text style={styles.label}>Archive</Text>
+            <TouchableOpacity
+              style={styles.archiveToggleRow}
+              onPress={() => setIsArchived((v) => !v)}
+              activeOpacity={0.7}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.archiveTitle}>{isArchived ? 'Archived' : 'Active'}</Text>
+                <Text style={styles.archiveSubtitle}>
+                  {isArchived
+                    ? 'Hidden from the main list until unarchived.'
+                    : 'Archive to hide without deleting.'}
+                </Text>
+              </View>
+              <Ionicons
+                name={isArchived ? 'archive' : 'archive-outline'}
+                size={20}
+                color={isArchived ? colors.primary : colors.textDim}
+              />
+            </TouchableOpacity>
+          </>
+        )}
+
         <View style={{ height: spacing.xxl }} />
       </ScrollView>
     </SafeAreaView>
@@ -291,11 +374,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
     paddingBottom: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
   },
   topTitle: { ...typography.h3, color: colors.text },
   saveText: { ...typography.bodyBold, color: colors.primary },
-  scroll: { paddingHorizontal: spacing.lg },
-  label: { ...typography.caption, color: colors.textDim, marginTop: spacing.md, marginBottom: spacing.xs, fontWeight: '600' },
+  saveTextDisabled: { color: colors.textFaint },
+  scroll: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
+  label: {
+    ...typography.caption,
+    color: colors.textDim,
+    marginTop: spacing.md,
+    marginBottom: spacing.xs,
+    fontWeight: '600',
+  },
   input: {
     backgroundColor: colors.cardAlt,
     borderRadius: radius.md,
@@ -318,6 +410,7 @@ const styles = StyleSheet.create({
     marginRight: spacing.sm,
     marginBottom: spacing.sm,
   },
+  emojiOptionActive: { borderColor: colors.primary, backgroundColor: colors.primary + '20' },
   colorOption: {
     width: 36,
     height: 36,
@@ -325,6 +418,7 @@ const styles = StyleSheet.create({
     marginRight: spacing.sm,
     marginBottom: spacing.sm,
   },
+  colorOptionActive: { borderWidth: 3, borderColor: colors.text },
   birthdayToggle: { flexDirection: 'row', alignItems: 'center' },
   birthdayToggleText: { ...typography.body, color: colors.text, marginLeft: spacing.sm },
   checkbox: {
@@ -349,6 +443,17 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   ageBadgeText: { ...typography.caption, color: colors.text, marginLeft: spacing.xs, flex: 1 },
+  archiveToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.cardAlt,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+  },
+  archiveTitle: { ...typography.bodyBold, color: colors.text },
+  archiveSubtitle: { ...typography.caption, color: colors.textFaint, marginTop: 2 },
 });
 
 export default AddFriendScreen;

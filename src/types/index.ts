@@ -87,6 +87,7 @@ export interface Friend {
   // --------------------------------------
 }
 
+// ---------------- UserProfile (kengaytirilgan, yakuniy versiya) ----------------
 export interface UserProfile {
   id: string;
   name: string;
@@ -99,6 +100,20 @@ export interface UserProfile {
   school?: string;
   instagram?: string;
   interests: string[];
+
+  // ---------------- NEW ----------------
+  avatarUrl?: string;
+  pushEnabled: boolean;
+  messageNotif: boolean;
+  likesNotif: boolean;
+  soundEnabled: boolean;
+  syncContacts: boolean;
+  syncCalendar: boolean;
+  privateAccount: boolean;
+  activityStatus: boolean;
+  blockedUserIds: string[];
+  mfaEnabled: boolean;
+  // --------------------------------------
 }
 
 export interface WorldSpecialDay {
@@ -183,6 +198,7 @@ export interface SocialLinkRow {
 }
 // --------------------------------------
 
+// ---------------- ProfileRow (kengaytirilgan, yakuniy versiya) ----------------
 export interface ProfileRow {
   id: string;
   name: string;
@@ -197,6 +213,26 @@ export interface ProfileRow {
   interests: string[];
   created_at: string;
   updated_at: string;
+
+  // ---------------- NEW ----------------
+  avatar_url: string | null;
+  push_enabled: boolean;
+  message_notif: boolean;
+  likes_notif: boolean;
+  sound_enabled: boolean;
+  sync_contacts: boolean;
+  sync_calendar: boolean;
+  private_account: boolean;
+  activity_status: boolean;
+  blocked_user_ids: string[];
+  // --------------------------------------
+}
+
+export interface BlockedUserRow {
+  id: string;
+  blocker_id: string;
+  blocked_id: string;
+  created_at: string;
 }
 
 export interface WorldHolidayRow {
@@ -212,3 +248,4 @@ export interface WorldHolidayRow {
   html_link: string | null;
   created_at: string;
 }
+

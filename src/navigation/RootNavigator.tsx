@@ -2,8 +2,8 @@ import React from 'react';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/theme';
+import LiquidGlassTabBar from '../components/LiquidGlassTabBar';
 
 import DatesScreen from '../screens/DatesScreen';
 import FriendsListScreen from '../screens/FriendsListScreen';
@@ -53,26 +53,10 @@ const RootNavigator: React.FC = () => {
   return (
     <NavigationContainer theme={navTheme}>
       <Tab.Navigator
-        screenOptions={({ route }) => ({
+        tabBar={(props) => <LiquidGlassTabBar {...props} />}
+        screenOptions={{
           headerShown: false,
-          tabBarStyle: {
-            backgroundColor: colors.bgElevated,
-            borderTopColor: colors.border,
-            height: 88,
-            paddingTop: 8,
-            paddingBottom: 28,
-          },
-          tabBarActiveTintColor: colors.primary,
-          tabBarInactiveTintColor: colors.textFaint,
-          tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
-          tabBarIcon: ({ color, size, focused }) => {
-            let iconName: keyof typeof Ionicons.glyphMap = 'ellipse';
-            if (route.name === 'DatesTab') iconName = focused ? 'calendar' : 'calendar-outline';
-            if (route.name === 'FriendsTab') iconName = focused ? 'people' : 'people-outline';
-            if (route.name === 'ProfileTab') iconName = focused ? 'person-circle' : 'person-circle-outline';
-            return <Ionicons name={iconName} size={size} color={color} />;
-          },
-        })}
+        }}
       >
         <Tab.Screen name="DatesTab" component={DatesStackNavigator} options={{ title: 'Dates' }} />
         <Tab.Screen name="FriendsTab" component={FriendsStackNavigator} options={{ title: 'Friends' }} />
