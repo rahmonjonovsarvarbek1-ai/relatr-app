@@ -181,3 +181,97 @@ yechim:
 
 Bu — service-role kalitni client kodiga chiqarmaslik uchun standart
 Supabase tavsiyasi.
+
+## Relatr-app: Stories + Nearby Suggestions — qo'shish qo'llanmasi
+
+## 1. Kerakli paketlarni o'rnatish
+
+```bash
+npx expo install expo-image-picker expo-location
+```
+
+## 2. Fayllarni ko'chirish
+
+- `screens/StoriesScreen.tsx` → `src/screens/StoriesScreen.tsx`
+- `components/NearbySuggestions.tsx` → `src/components/NearbySuggestions.tsx`
+
+## 3. Navigatsiyaga qo'shish
+
+`RootNavigator.tsx`ga StoriesScreen uchun yangi tab yoki stack screen qo'shing:
+
+```tsx
+import StoriesScreen from '../screens/StoriesScreen';
+
+// Tab.Navigator ichida:
+<Tab.Screen name="Stories" component={StoriesScreen} />
+```
+
+## 4. NearbySuggestions'ni joylashtirish
+
+Masalan `FriendsListScreen.tsx` yoki asosiy Home ekranining tepasiga:
+
+```tsx
+import NearbySuggestions from '../components/NearbySuggestions';
+
+// JSX ichida, ScrollView ichida:
+<NearbySuggestions />
+```
+
+## 5. app.json ga lokatsiya va media ruxsatlarini qo'shish
+
+```json
+{
+  "expo": {
+    "ios": {
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Yaqin atrofdagi do'stlarni tavsiya qilish uchun joylashuvingiz kerak.",
+        "NSPhotoLibraryUsageDescription": "Story qo'shish uchun galereyaga kirish kerak."
+      }
+    },
+    "android": {
+      "permissions": ["ACCESS_FINE_LOCATION", "READ_MEDIA_IMAGES"]
+    }
+  }
+}
+```
+
+## 6. Supabase — SQL migration ishga tushirish
+
+`sql/001_stories_and_nearby.sql` faylini Supabase SQL Editor orqali ishga tushiring
+(yoki `supabase db push` orqali migration sifatida).
+
+**Muhim:** Fayldagi `public.friendships` va `public.profiles` jadval nomlarini
+o'zingizning loyihangizdagi haqiqiy nomlarga moslashtiring (masalan agar sizda
+`friends` jadvali boshqacha strukturada bo'lsa).
+
+## 7. Supabase Storage bucket yaratish (stories uchun)
+
+Dashboard > Storage > "New bucket":
+
+- Nomi: `story-media`
+- Public: ✅ yoqilgan (yoki signed URL siyosatini o'rnating)
+
+## 8. Google Calendar edge function
+
+`edge-functions/google-calendar-sync/index.ts` — bu sizning mavjud edge
+functionni to'liq ishlaydigan versiyasi bilan almashtiring:
+
+```bash
+supabase functions deploy google-calendar-sync
+supabase secrets set GOOGLE_CALENDAR_API_KEY=<your_key>
+```
+
+Google API key olish: Google Cloud Console → APIs & Services → Credentials →
+"Create API Key", so'ng "Google Calendar API"ni yoqing.
+
+Keyin uni pg_cron orqali har kuni avtomatik ishga tushirish uchun SQL faylning
+oxiridagi kommentariyadagi `cron.schedule(...)` qismini oching va
+`<PROJECT_REF>` hamda service role key'ni to'g'rilang.
+
+## 9. Eslatma: kod sifatini yaxshilash bo'yicha
+
+DatesScreen.tsx allaqachon toza va professional yozilgan (theme tokenlari,
+alohida komponentlar, realtime subscribe/cleanup to'g'ri). Stories va
+Nearby qo'shimchalari xuddi shu konventsiyalarga (colors/spacing/radius/typography,
+Card/Avatar/SectionHeader) mos qilib yozildi — shuning uchun loyihaga
+"yot" ko'rinmaydi.

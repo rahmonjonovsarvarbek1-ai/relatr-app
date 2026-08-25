@@ -8,7 +8,14 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.sarvarbek.relatr.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocationWhenInUseUsageDescription": "Yaqin atrofdagi do'stlarni tavsiya qilish uchun joylashuvingiz kerak.",
+        "NSContactsUsageDescription": "Do'stlaringizni topish uchun kontaktlarga ruxsat kerak.",
+        "NSCalendarsUsageDescription": "Tug'ilgan kunlarni kalendaringizga qo'shish uchun ruxsat kerak."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -17,7 +24,14 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "ACCESS_FINE_LOCATION",
+        "READ_CONTACTS",
+        "READ_CALENDAR",
+        "WRITE_CALENDAR"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -36,8 +50,16 @@
           "icon": "./assets/icon.png",
           "color": "#8B5FE0"
         }
-      ]
-    ]
+      ],
+      "expo-location",
+      "expo-contacts",
+      "expo-calendar",
+      "expo-font"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "9a3d3f4b-8afb-48a8-ab1d-ab5b98413c14"
+      }
+    }
   }
 }
-

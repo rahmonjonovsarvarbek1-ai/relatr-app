@@ -13,46 +13,72 @@
 //     `-before`), so callers can cancel/replace a date's notifications
 //     without having to track any extra state.
 //
-// All functions are no-ops (and never throw) when running on web or in
-// an environment where expo-notifications isn't available, so this file
-// is always safe to import from cross-platform code.
+// All functions are no-ops (and never throw) when running on web, in Expo
+// Go (which no longer supports expo-notifications remote/native features
+// as of SDK 53+), or in any environment where expo-notifications isn't
+// available. This file is always safe to import from cross-platform code.
 
 import { Platform } from 'react-native';
-import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import { Friend, ImportantDate } from '../types';
 
 const REMINDER_DAYS_BEFORE = 3;
 const NOTIFICATION_HOUR = 9; // 9:00 local time
 const NOTIFICATION_MINUTE = 0;
 
+// Expo Go (SDK 53+) no longer supports expo-notifications' native
+// functionality. Detect it so every function below can safely no-op
+// instead of throwing "[runtime not ready]: Exception in HostFunction".
+const isExpoGo = Constants.appOwnership === 'expo';
+const isUnsupportedEnv = Platform.OS === 'web' || isExpoGo;
+
+// Lazily/safely load the native module. In Expo Go this import still
+// resolves (the JS package is installed), but calling into it throws —
+// so we additionally guard every call site with isUnsupportedEnv below.
+// Wrapping the import itself in a try/catch protects against edge cases
+// where even requiring the native module throws synchronously.
+let Notifications: typeof import('expo-notifications') | null = null;
+if (!isUnsupportedEnv) {
+  try {
+    Notifications = require('expo-notifications');
+  } catch (e) {
+    console.error('expo-notifications module failed to load:', e);
+    Notifications = null;
+  }
+}
+
 let handlerConfigured = false;
 
 /** Tells the OS how to present a notification while the app is foregrounded. */
 export function configureNotificationHandler() {
-  if (handlerConfigured || Platform.OS === 'web') return;
+  if (handlerConfigured || isUnsupportedEnv || !Notifications) return;
   handlerConfigured = true;
 
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }),
-  });
+  try {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+      }),
+    });
 
-  if (Platform.OS === 'android') {
-    Notifications.setNotificationChannelAsync('important-dates', {
-      name: 'Important dates',
-      importance: Notifications.AndroidImportance.HIGH,
-      vibrationPattern: [0, 250, 250, 250],
-    }).catch(() => {});
+    if (Platform.OS === 'android') {
+      Notifications.setNotificationChannelAsync('important-dates', {
+        name: 'Important dates',
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 250, 250, 250],
+      }).catch(() => {});
+    }
+  } catch (e) {
+    console.error('configureNotificationHandler error:', e);
   }
 }
 
 /** Requests OS notification permission. Safe to call multiple times. */
 export async function requestNotificationPermissionsAsync(): Promise<boolean> {
-  if (Platform.OS === 'web') return false;
+  if (isUnsupportedEnv || !Notifications) return false;
   try {
     configureNotificationHandler();
     const existing = await Notifications.getPermissionsAsync();
@@ -67,7 +93,7 @@ export async function requestNotificationPermissionsAsync(): Promise<boolean> {
 }
 
 export async function hasNotificationPermissionAsync(): Promise<boolean> {
-  if (Platform.OS === 'web') return false;
+  if (isUnsupportedEnv || !Notifications) return false;
   try {
     const res = await Notifications.getPermissionsAsync();
     return !!res.granted;
@@ -105,7 +131,7 @@ export async function scheduleImportantDateNotifications(
   friend: Pick<Friend, 'id' | 'name'>,
   date: ImportantDate
 ): Promise<void> {
-  if (Platform.OS === 'web') return;
+  if (isUnsupportedEnv || !Notifications) return;
   try {
     configureNotificationHandler();
     await cancelImportantDateNotifications(date.id);
@@ -157,7 +183,7 @@ export async function scheduleImportantDateNotifications(
 
 /** Cancels both notifications (on-day + reminder) for one important date. */
 export async function cancelImportantDateNotifications(dateId: string): Promise<void> {
-  if (Platform.OS === 'web') return;
+  if (isUnsupportedEnv || !Notifications) return;
   try {
     await Promise.all([
       Notifications.cancelScheduledNotificationAsync(onDayIdentifier(dateId)).catch(() => {}),
@@ -170,7 +196,7 @@ export async function cancelImportantDateNotifications(dateId: string): Promise<
 
 /** Schedules notifications for every important date belonging to a friend. */
 export async function scheduleAllForFriend(friend: Friend): Promise<void> {
-  if (Platform.OS === 'web') return;
+  if (isUnsupportedEnv || !Notifications) return;
   for (const date of friend.importantDates) {
     await scheduleImportantDateNotifications(friend, date);
   }
@@ -179,7 +205,7 @@ export async function scheduleAllForFriend(friend: Friend): Promise<void> {
 /** Cancels notifications for every important date belonging to a friend
  * (used when the friend itself is deleted). */
 export async function cancelAllForFriend(friend: Pick<Friend, 'importantDates'>): Promise<void> {
-  if (Platform.OS === 'web') return;
+  if (isUnsupportedEnv || !Notifications) return;
   for (const date of friend.importantDates) {
     await cancelImportantDateNotifications(date.id);
   }
@@ -187,7 +213,7 @@ export async function cancelAllForFriend(friend: Pick<Friend, 'importantDates'>)
 
 /** Cancels every scheduled Relatr notification (used when push is turned off). */
 export async function cancelAllScheduledNotificationsAsync(): Promise<void> {
-  if (Platform.OS === 'web') return;
+  if (isUnsupportedEnv || !Notifications) return;
   try {
     await Notifications.cancelAllScheduledNotificationsAsync();
   } catch (e) {
@@ -199,7 +225,7 @@ export async function cancelAllScheduledNotificationsAsync(): Promise<void> {
  * important dates. Used on app start and when push notifications are
  * toggled back on. Archived friends are skipped. */
 export async function rescheduleAllNotifications(friends: Friend[]): Promise<void> {
-  if (Platform.OS === 'web') return;
+  if (isUnsupportedEnv || !Notifications) return;
   try {
     await cancelAllScheduledNotificationsAsync();
     if (!(await hasNotificationPermissionAsync())) return;
