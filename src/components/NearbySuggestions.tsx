@@ -42,9 +42,10 @@ const NearbySuggestions: React.FC = () => {
       }
 
       await supabase.from('user_locations').upsert({
-        user_id: userId,
-        location: `POINT(${pos.coords.longitude} ${pos.coords.latitude})`,
-        updated_at: new Date().toISOString(),
+      user_id: userId,
+      lat: pos.coords.latitude,
+      lng: pos.coords.longitude,
+      updated_at: new Date().toISOString(),
       });
 
       const { data: nearby, error } = await supabase.rpc('nearby_friend_suggestions', {

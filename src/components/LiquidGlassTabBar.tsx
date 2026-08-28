@@ -4,6 +4,7 @@ import { View, TouchableOpacity, StyleSheet, Platform, Dimensions } from 'react-
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import Svg, { Path, Circle } from 'react-native-svg';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import Animated, {
   useSharedValue,
@@ -24,6 +25,32 @@ const ICONS: Record<string, { active: keyof typeof Ionicons.glyphMap; inactive: 
   FriendsTab: { active: 'people', inactive: 'people-outline' },
   ProfileTab: { active: 'person-circle', inactive: 'person-circle-outline' },
 };
+
+// routes that render a custom SVG instead of an Ionicon glyph
+const CUSTOM_ICON_ROUTES = new Set(['StoryTab']);
+
+const StoryIcon: React.FC<{ size?: number; color?: string }> = ({ size = 24, color = '#fff' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    {/* solid ring, most of the circle */}
+    <Path
+      d="M12 3 A9 9 0 1 1 4.5 17"
+      stroke={color}
+      strokeWidth={2.3}
+      strokeLinecap="round"
+      fill="none"
+    />
+    {/* dashes filling the empty side */}
+    <Path
+      d="M4.5 17 A9 9 0 0 1 12 3"
+      stroke={color}
+      strokeWidth={2.3}
+      strokeLinecap="round"
+      strokeDasharray="1.8 3"
+      fill="none"
+      opacity="0.9"
+    />
+  </Svg>
+);
 
 const AnimatedBlurView = Animated.createAnimatedComponent(BlurView);
 
@@ -55,38 +82,32 @@ const LiquidGlassTabBar: React.FC<BottomTabBarProps> = ({ state, descriptors, na
   return (
     <View style={styles.wrapper} pointerEvents="box-none">
       <View style={styles.glassContainer}>
-        {/* Asosiy blur qatlami — haqiqiy Liquid Glass materiali */}
         <BlurView
           intensity={Platform.OS === 'ios' ? 55 : 90}
           tint={Platform.OS === 'ios' ? 'systemUltraThinMaterialDark' : 'dark'}
           style={StyleSheet.absoluteFill}
         />
 
-        {/* Bazaviy shaffof qora qatlam — Android fallback va rang chuqurligi uchun */}
         <View style={styles.tintOverlay} pointerEvents="none" />
 
-        {/* Suv tomchisidek yaltiroq ustki qatlam */}
         <LinearGradient
-          colors={['rgba(255,255,255,0.22)', 'rgba(255,255,255,0.05)', 'rgba(255,255,255,0.0)']}
+          colors={['rgba(2, 2, 2, 0.07)', 'rgba(0, 0, 0, 0.05)', 'rgba(255,255,255,0.0)']}
           start={{ x: 0.1, y: 0 }}
           end={{ x: 0.9, y: 1 }}
           style={StyleSheet.absoluteFill}
           pointerEvents="none"
         />
 
-        {/* Pastki nozik yorug'lik chizig'i — shisha qirrasining refleksi */}
         <LinearGradient
-          colors={['rgba(255,255,255,0.0)', 'rgba(255,255,255,0.12)']}
+          colors={['rgba(255,255,255,0.0)', 'rgba(0, 0, 0, 0.12)']}
           start={{ x: 0, y: 0.85 }}
           end={{ x: 0, y: 1 }}
           style={StyleSheet.absoluteFill}
           pointerEvents="none"
         />
 
-        {/* Nozik ichki chegara — shisha qirrasi hissi */}
         <View style={styles.innerBorder} pointerEvents="none" />
 
-        {/* Harakatlanuvchi faol pill (suzuvchi shisha tomchisi) */}
         <Animated.View style={[styles.activePill, { width: PILL_SIZE, height: PILL_SIZE }, pillAnimatedStyle]}>
           <AnimatedBlurView
             intensity={Platform.OS === 'ios' ? 35 : 60}
@@ -94,7 +115,7 @@ const LiquidGlassTabBar: React.FC<BottomTabBarProps> = ({ state, descriptors, na
             style={StyleSheet.absoluteFill}
           />
           <LinearGradient
-            colors={['rgba(255, 255, 255, 0.18)', 'rgba(255,255,255,0.05)']}
+            colors={['rgba(88, 83, 83, 0.01)', 'rgba(27, 26, 26, 0.05)']}
             style={StyleSheet.absoluteFill}
           />
           <View style={styles.pillBorder} pointerEvents="none" />
@@ -104,6 +125,7 @@ const LiquidGlassTabBar: React.FC<BottomTabBarProps> = ({ state, descriptors, na
           {state.routes.map((route, index) => {
             const isFocused = state.index === index;
             const icon = ICONS[route.name] ?? { active: 'ellipse', inactive: 'ellipse-outline' };
+            const tintColor = isFocused ? colors.primary : colors.textFaint;
 
             const onPress = () => {
               const event = navigation.emit({
@@ -125,12 +147,16 @@ const LiquidGlassTabBar: React.FC<BottomTabBarProps> = ({ state, descriptors, na
                 activeOpacity={0.75}
                 style={styles.tabItem}
               >
-                <Ionicons
-                  name={isFocused ? icon.active : icon.inactive}
-                  size={24}
-                  color={isFocused ? colors.primary : colors.textFaint}
-                  style={{ zIndex: 1 }}
-                />
+                {CUSTOM_ICON_ROUTES.has(route.name) ? (
+                  <StoryIcon size={24} color={tintColor} />
+                ) : (
+                  <Ionicons
+                    name={isFocused ? icon.active : icon.inactive}
+                    size={24}
+                    color={tintColor}
+                    style={{ zIndex: 1 }}
+                  />
+                )}
               </TouchableOpacity>
             );
           })}
@@ -171,7 +197,7 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     borderRadius: 32,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
+    borderColor: 'rgba(0, 0, 0, 0.18)',
   },
   tabsRow: {
     flex: 1,
@@ -196,7 +222,7 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     borderRadius: 24,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
+    borderColor: 'rgba(0, 0, 0, 0.3)',
   },
 });
 

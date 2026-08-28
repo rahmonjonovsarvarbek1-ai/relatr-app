@@ -10,31 +10,24 @@ import FriendsListScreen from '../screens/FriendsListScreen';
 import FriendProfileScreen from '../screens/FriendProfileScreen';
 import AddFriendScreen from '../screens/AddFriendScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import StoriesScreen from '../screens/StoriesScreen';
+
 
 const Tab = createBottomTabNavigator();
-const FriendsStack = createNativeStackNavigator();
-const DatesStack = createNativeStackNavigator();
+const RootStack = createNativeStackNavigator(); // <-- 1. Yangi RootStack yaratildi
 
-const FriendsStackNavigator = () => (
-  <FriendsStack.Navigator screenOptions={{ headerShown: false }}>
-    <FriendsStack.Screen name="FriendsList" component={FriendsListScreen} />
-    <FriendsStack.Screen
-      name="FriendProfile"
-      component={FriendProfileScreen}
-      options={{ presentation: 'card' }}
-    />
-    <FriendsStack.Screen
-      name="AddFriend"
-      component={AddFriendScreen}
-      options={{ presentation: 'modal' }}
-    />
-  </FriendsStack.Navigator>
-);
-
-const DatesStackNavigator = () => (
-  <DatesStack.Navigator screenOptions={{ headerShown: false }}>
-    <DatesStack.Screen name="DatesHome" component={DatesScreen} />
-  </DatesStack.Navigator>
+const MainTabs = () => (
+  <Tab.Navigator
+    tabBar={(props) => <LiquidGlassTabBar {...props} />}
+    screenOptions={{
+      headerShown: false,
+    }}
+  >
+    <Tab.Screen name="DatesTab" component={DatesScreen} options={{ title: 'Dates' }} />
+    <Tab.Screen name="FriendsTab" component={FriendsListScreen} options={{ title: 'Friends' }} />
+    <Tab.Screen name="StoryTab" component={StoriesScreen} options={{ title: 'My Story' }} />
+    <Tab.Screen name="ProfileTab" component={ProfileScreen} options={{ title: 'Profile' }} />
+  </Tab.Navigator>
 );
 
 const navTheme = {
@@ -52,16 +45,23 @@ const navTheme = {
 const RootNavigator: React.FC = () => {
   return (
     <NavigationContainer theme={navTheme}>
-      <Tab.Navigator
-        tabBar={(props) => <LiquidGlassTabBar {...props} />}
-        screenOptions={{
-          headerShown: false,
-        }}
-      >
-        <Tab.Screen name="DatesTab" component={DatesStackNavigator} options={{ title: 'Dates' }} />
-        <Tab.Screen name="FriendsTab" component={FriendsStackNavigator} options={{ title: 'Friends' }} />
-        <Tab.Screen name="ProfileTab" component={ProfileScreen} options={{ title: 'Profile' }} />
-      </Tab.Navigator>
+      <RootStack.Navigator screenOptions={{ headerShown: false }}>
+        {/* Pastki tab menyu */}
+        <RootStack.Screen name="MainTabs" component={MainTabs} />
+
+        {/* 2. FriendProfile va AddFriend ham shu yerga qo'shildi! 
+            Endi istalgan sahifadan do'st profiliga o'tib bo'ladi */}
+        <RootStack.Screen
+          name="FriendProfile"
+          component={FriendProfileScreen}
+          options={{ presentation: 'card' }}
+        />
+        <RootStack.Screen
+          name="AddFriend"
+          component={AddFriendScreen}
+          options={{ presentation: 'modal' }}
+        />
+      </RootStack.Navigator>
     </NavigationContainer>
   );
 };

@@ -4,13 +4,14 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { AppProvider } from './src/context/AppContext';
+import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import RootNavigator from './src/navigation/RootNavigator';
 import AuthScreen from './src/screens/AuthScreen';
-import { colors } from './src/theme/theme';
 import { configureNotificationHandler, requestNotificationPermissionsAsync } from './src/utils/notifications';
 
 const Gate: React.FC = () => {
   const { session, initializing } = useAuth();
+  const { colors } = useTheme();
 
   useEffect(() => {
     configureNotificationHandler();
@@ -46,11 +47,13 @@ const Gate: React.FC = () => {
 
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <AuthProvider>
-        <StatusBar style="light" />
-        <Gate />
-      </AuthProvider>
-    </SafeAreaProvider>
+    <ThemeProvider>
+      <SafeAreaProvider>
+        <AuthProvider>
+          <StatusBar style="light" />
+          <Gate />
+        </AuthProvider>
+      </SafeAreaProvider>
+    </ThemeProvider>
   );
 }

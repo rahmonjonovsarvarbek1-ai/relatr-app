@@ -21,6 +21,7 @@ import { colors, radius, spacing, typography, avatarPalette } from '../theme/the
 import Avatar from '../components/Avatar';
 import Chip from '../components/Chip';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { formatFullDate } from '../utils/dateUtils';
 import DateFields from '../components/DateFields';
 import { useAuth } from '../context/AuthContext';
@@ -41,6 +42,7 @@ const ProfileScreen: React.FC = () => {
   const { profile, friends, updateProfile } = useApp();
   const { signOut } = useAuth();
   const settings = useProfileSettings();
+  const navigation = useNavigation<any>();
   const [editing, setEditing] = useState(false);
 
   // ---- Edit profile form state ----
@@ -322,6 +324,13 @@ const ProfileScreen: React.FC = () => {
     return '';
   };
 
+  // Navigate to a friend's FriendProfileScreen (same route name used by the
+  // Dates screen) and close the stat modal behind it.
+  const openFriendProfile = (friendId: string) => {
+    setStatModal(null);
+    navigation.navigate('FriendProfile', { friendId });
+  };
+
   const renderStatModalContent = () => {
     if (statModal === 'categories') {
       return (
@@ -366,14 +375,23 @@ const ProfileScreen: React.FC = () => {
           </View>
         }
         renderItem={({ item }) => (
-          <View style={styles.statRow}>
-            <Avatar emoji={item.emoji ?? '🙂'} color={item.avatarColor ?? colors.primary} size={40} />
+          <TouchableOpacity
+            style={styles.statRow}
+            activeOpacity={0.6}
+            onPress={() => openFriendProfile(item.id)}
+          >
+            {item.photoUri ? (
+              <Image source={{ uri: item.photoUri }} style={styles.statRowPhoto} />
+            ) : (
+              <Avatar emoji={item.emoji ?? '🙂'} color={item.avatarColor ?? colors.primary} size={40} />
+            )}
             <View style={{ marginLeft: spacing.sm, flex: 1 }}>
               <Text style={styles.statRowText}>{item.name}</Text>
               {!!item.category && <Text style={styles.statRowSub}>{item.category}</Text>}
             </View>
-            {item.favorite && <Ionicons name="star" size={16} color={colors.primary} />}
-          </View>
+            {item.favorite && <Ionicons name="star" size={16} color={colors.primary} style={{ marginRight: spacing.xs }} />}
+            <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
+          </TouchableOpacity>
         )}
       />
     );
@@ -474,9 +492,7 @@ const ProfileScreen: React.FC = () => {
         <View style={styles.settingsGroup}>
           <SettingRow icon="notifications-outline" label="Notifications" onPress={() => goToPage('notifications')} />
           <SettingRow icon="cloud-upload-outline" label="Contact & Calendar Sync" onPress={() => goToPage('calendar')} />
-          <SettingRow icon="lock-closed-outline" label="Privacy" onPress={() => goToPage('privacy')} last />
-        </View>
-        <View style={styles.settingsGroup}>
+          <SettingRow icon="lock-closed-outline" label="Privacy" onPress={() => goToPage('privacy')} />
           <SettingRow icon="information-circle-outline" label="About" onPress={() => goToPage('about')} last />
         </View>
 
@@ -1045,6 +1061,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
+  statRowPhoto: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.cardAlt },
   statRowText: { ...typography.body, color: colors.text },
   statRowSub: { ...typography.caption, color: colors.textFaint, marginTop: 2 },
   statRowCount: { ...typography.bodyBold, color: colors.primary },
