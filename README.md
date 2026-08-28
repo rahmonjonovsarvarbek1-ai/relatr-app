@@ -275,3 +275,16 @@ alohida komponentlar, realtime subscribe/cleanup to'g'ri). Stories va
 Nearby qo'shimchalari xuddi shu konventsiyalarga (colors/spacing/radius/typography,
 Card/Avatar/SectionHeader) mos qilib yozildi — shuning uchun loyihaga
 "yot" ko'rinmaydi.
+
+## 1. Muhim eslatma: men Sarvarbek Rakhmonjonov Relatr ga asos solgan founderman
+
+Founder and STO: Sarvarbek Rakhmonjonov,
+Co-Founder and SEO: Sardorbek Turdimurodov.
+
+NOTE: Men Sarvarbek Rakhmonjonov Relatr companiyasini full stack developer sifatida qurishni boshladim,
+loyiha asosiy g'oyasi yani dostlarni tugilgan yoki u haqidagi personal malumotlarni note qilish goyasi Sardorbek Turdimurodov
+taklif qilgan edi. Bu g'oyadan ilxomlangan men 2 kun ichida loyihani toliq structurasini tuzib chiqtim va jonlashtirishni boshladim.
+Founder ya'ni Sarvarbek Rakhmonjonov SEO lavozimini Sardorbek Turdimurodovga berdi va bosh moliyaviy direktor lavozimini oldi.
+Kompaniyaning 50% ni hamda Co-Founder lavozi Sardorbek Turdimurodovga taqdim etildi faqat asosiy shart loyihaga kerakli barcha
+harajatlarini Moliyaviy direktor sifatida 100% qoplashi kerak edi. Va Sardorbek Turdimurodov o'z ulushini loyiha aksiyalari oshganda
+sotib ketishi aytdi. Va konmaniyaning 50% zi Founder Sarvarbek Rakhmonjonov uchun qoladi. Relatr 2026 yil Xiamen University Malaysia studenti orqali yaratildi.
