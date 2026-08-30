@@ -5,24 +5,22 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
   Image,
   Modal,
-  Animated,
   ActivityIndicator,
   Alert,
   TextInput,
   FlatList,
   useWindowDimensions,
-  Platform,
-  KeyboardAvoidingView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
+import { decode } from 'base64-arraybuffer';
 import {
   Search,
   Bell,
   Plus,
-  X,
   Star,
   Users,
   UserPlus,
@@ -31,8 +29,6 @@ import {
   MoreHorizontal,
   Trash2,
   BookmarkPlus,
-  Type as TypeIcon,
-  Send,
   ChevronRight,
 } from 'lucide-react-native';
 import { useApp } from '../context/AppContext';
@@ -42,64 +38,19 @@ import type { ColorScheme } from '../theme/theme';
 import Avatar from '../components/Avatar';
 import { SectionHeader } from '../components/Card';
 import { supabase } from '../utils/supabase';
-
-// ---------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------
-
-type StoryRow = {
-  id: string;
-  owner_id: string;
-  media_url: string;
-  media_type: 'image' | 'video';
-  caption: string | null;
-  created_at: string;
-  expires_at: string;
-  is_highlight?: boolean;
-  highlight_title?: string | null;
-  like_count?: number;
-  liked_by_me?: boolean;
-};
-
-type FriendStoryGroup = {
-  friendId: string;
-  friendName: string;
-  emoji: string;
-  color: string;
-  stories: StoryRow[];
-  allViewed: boolean;
-  isMine?: boolean;
-};
-
-type HighlightGroup = {
-  id: string;
-  title: string;
-  coverUrl: string;
-  stories: StoryRow[];
-};
-
-type NotificationRow = {
-  id: string;
-  type: 'like' | 'follow_request' | 'new_story';
-  actor_name: string;
-  actor_emoji: string;
-  actor_color: string;
-  created_at: string;
-  read: boolean;
-};
-
-type SearchUser = {
-  id: string;
-  name: string;
-  username: string;
-  emoji: string;
-  color: string;
-  is_friend: boolean;
-  is_private: boolean;
-};
-
-const STORY_DURATION_MS = 5000;
-const HIGHLIGHT_TITLES = ['Travel', 'Friends', 'Food', 'Memories', 'Events'];
+import StoryViewerModal from './StoryViewerModal';
+import StoryComposerModal from './StoryComposerModal';
+import {
+  HIGHLIGHT_TITLES,
+  type FriendStoryGroup,
+  type HighlightGroup,
+  type NotificationRow,
+  type SearchUser,
+  type StoryRow,
+  type StoryTextSticker,
+  type StoryMentionSticker,
+  type StoryLocationSticker,
+} from './storyTypes';
 
 // ---------------------------------------------------------------------
 // Screen
@@ -179,6 +130,8 @@ const StoriesScreen: React.FC = () => {
 
   const loadHighlights = useCallback(async () => {
     if (!currentUserId) return;
+    // Highlights are permanent, so this query intentionally does not
+    // filter on expires_at at all (unlike loadStories above).
     const { data, error } = await supabase
       .from('stories')
       .select('*')
@@ -287,7 +240,10 @@ const StoriesScreen: React.FC = () => {
 
   // -------------------------------------------------------------
   // Pick media, then open the full-screen composer so the user
-  // can add text before posting.
+  // can add text before posting. Uses the array-of-strings media
+  // types API (['images', 'videos']) rather than the deprecated
+  // ImagePicker.MediaTypeOptions enum, which expo-image-picker
+  // warns will be removed in a future SDK release.
   // -------------------------------------------------------------
   const handlePickMedia = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -297,7 +253,7 @@ const StoriesScreen: React.FC = () => {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      mediaTypes: ['images', 'videos'],
       quality: 0.8,
       allowsEditing: true,
       aspect: [9, 16],
@@ -306,40 +262,88 @@ const StoriesScreen: React.FC = () => {
     if (result.canceled || !result.assets?.[0]?.uri) return;
 
     const asset = result.assets[0];
+    // asset.type from expo-image-picker is always the plain string
+    // 'image' | 'video' — there is no nested object to unwrap.
     setComposerType(asset.type === 'video' ? 'video' : 'image');
     setComposerUri(asset.uri);
   };
 
-  const handlePublishStory = async (uri: string, mediaType: 'image' | 'video', caption: string) => {
+  // -------------------------------------------------------------
+  // Publish a story: upload the media, then insert the row (plus
+  // any mention rows). Media is read via expo-file-system and
+  // decoded to an ArrayBuffer rather than fetch(uri).blob():
+  // on native (Expo Go / bare RN), fetching a local file:// URI
+  // and calling .blob() on the response silently produces a
+  // 0-byte blob on some Android/iOS builds — the upload "succeeds"
+  // but the story's media is empty, which is why stories posted
+  // from a phone could show up blank while the web build worked
+  // fine (browsers don't have this blob-from-file-uri bug).
+  // -------------------------------------------------------------
+  const handlePublishStory = async (
+    uri: string,
+    mediaType: 'image' | 'video',
+    payload: {
+      caption: string;
+      textStickers: StoryTextSticker[];
+      mentionStickers: StoryMentionSticker[];
+      locationSticker: StoryLocationSticker | null;
+    }
+  ) => {
     if (!currentUserId) return;
     setUploading(true);
     try {
+      const caption = payload.caption ?? '';
       const fileExt = uri.split('.').pop() ?? (mediaType === 'video' ? 'mp4' : 'jpg');
       const fileName = `${currentUserId}/${Date.now()}.${fileExt}`;
 
-      const response = await fetch(uri);
-      const blob = await response.blob();
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: 'base64' as const,
+      });
+      const arrayBuffer = decode(base64);
 
       const { error: uploadError } = await supabase.storage
         .from('story-media')
-        .upload(fileName, blob, {
+        .upload(fileName, arrayBuffer, {
           contentType: mediaType === 'video' ? `video/${fileExt}` : `image/${fileExt}`,
         });
 
       if (uploadError) throw uploadError;
 
-      const { data: publicUrlData } = supabase.storage
-        .from('story-media')
-        .getPublicUrl(fileName);
+      const { data: publicUrlData } = supabase.storage.from('story-media').getPublicUrl(fileName);
 
-      const { error: insertError } = await supabase.from('stories').insert({
-        owner_id: currentUserId,
-        media_url: publicUrlData.publicUrl,
-        media_type: mediaType,
-        caption: caption.trim() ? caption.trim() : null,
-      });
+      const { data: inserted, error: insertError } = await supabase
+        .from('stories')
+        .insert([
+          {
+            owner_id: currentUserId,
+            media_url: publicUrlData.publicUrl,
+            media_type: mediaType,
+            caption: caption.trim() ? caption.trim() : null,
+            expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+            is_highlight: false,
+            text_stickers: payload.textStickers,
+            location_label: payload.locationSticker?.label ?? null,
+            location_x: payload.locationSticker?.x ?? null,
+            location_y: payload.locationSticker?.y ?? null,
+          },
+        ])
+        .select('id')
+        .single();
 
       if (insertError) throw insertError;
+
+      // Mentions live in their own join table so mentioned friends
+      // can be notified and queried independently of the story row.
+      if (inserted && payload.mentionStickers.length > 0) {
+        await supabase.from('story_mentions').insert(
+          payload.mentionStickers.map((m) => ({
+            story_id: inserted.id,
+            friend_id: m.friendId,
+            x: m.x,
+            y: m.y,
+          }))
+        );
+      }
 
       setComposerUri(null);
       loadStories();
@@ -354,20 +358,44 @@ const StoriesScreen: React.FC = () => {
     async (storyId: string) => {
       if (viewedIds.has(storyId) || !currentUserId) return;
       setViewedIds((prev) => new Set(prev).add(storyId));
-      await supabase.from('story_views').insert({ story_id: storyId, viewer_id: currentUserId });
+      const { error } = await supabase
+        .from('story_views')
+        .insert({ story_id: storyId, viewer_id: currentUserId });
+      if (error) {
+        // Roll back so a retry (e.g. reopening the story) is possible
+        // instead of leaving a view marked locally that never made it
+        // to the server.
+        setViewedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(storyId);
+          return next;
+        });
+      }
     },
     [viewedIds, currentUserId]
   );
 
   const markAllNotifsRead = useCallback(async () => {
     if (!currentUserId) return;
+    const previous = notifications;
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-    await supabase.from('notifications').update({ read: true }).eq('recipient_id', currentUserId);
-  }, [currentUserId]);
+    const { error } = await supabase
+      .from('notifications')
+      .update({ read: true })
+      .eq('recipient_id', currentUserId);
+    if (error) {
+      // Roll back the optimistic update so the unread badge doesn't
+      // lie about what's actually been persisted.
+      setNotifications(previous);
+    }
+  }, [currentUserId, notifications]);
 
   // -------------------------------------------------------------
   // Like / unlike a story. A DB trigger creates the "liked your
   // story" notification server-side (see accompanying SQL).
+  // Throws on failure so the viewer can roll back the optimistic
+  // update and tell the user, instead of silently drifting out of
+  // sync with the server.
   // -------------------------------------------------------------
   const toggleLike = useCallback(
     async (story: StoryRow) => {
@@ -384,17 +412,24 @@ const StoriesScreen: React.FC = () => {
               }
             : s
         );
+      const revert = (list: StoryRow[]) =>
+        list.map((s) => (s.id === story.id ? { ...s, ...story } : s));
+
       setMyStories((prev) => patch(prev));
       setFriendStories((prev) => patch(prev));
 
-      if (alreadyLiked) {
-        await supabase
-          .from('story_likes')
-          .delete()
-          .eq('story_id', story.id)
-          .eq('user_id', currentUserId);
-      } else {
-        await supabase.from('story_likes').insert({ story_id: story.id, user_id: currentUserId });
+      const { error } = alreadyLiked
+        ? await supabase
+            .from('story_likes')
+            .delete()
+            .eq('story_id', story.id)
+            .eq('user_id', currentUserId)
+        : await supabase.from('story_likes').insert({ story_id: story.id, user_id: currentUserId });
+
+      if (error) {
+        setMyStories((prev) => revert(prev));
+        setFriendStories((prev) => revert(prev));
+        throw error;
       }
     },
     [currentUserId]
@@ -403,8 +438,11 @@ const StoriesScreen: React.FC = () => {
   // -------------------------------------------------------------
   // Save an existing story into a highlight (a permanent copy
   // flagged is_highlight = true, so it survives past the 24h
-  // expiry of the original). This is exactly the "eslab yurish"
-  // (remember it) behaviour from the sketch.
+  // expiry of the original). expires_at is null rather than a
+  // far-future placeholder date — loadHighlights never filters on
+  // expires_at, so "permanent" is expressed as "no expiry" instead
+  // of "expires in the year 2099". Requires the stories.expires_at
+  // column to allow NULL (see accompanying SQL).
   // -------------------------------------------------------------
   const addToHighlight = useCallback(
     async (story: StoryRow, title: string) => {
@@ -416,7 +454,11 @@ const StoriesScreen: React.FC = () => {
         caption: story.caption,
         is_highlight: true,
         highlight_title: title,
-        expires_at: '2099-12-31T00:00:00.000Z',
+        expires_at: null,
+        text_stickers: story.text_stickers ?? [],
+        location_label: story.location_label ?? null,
+        location_x: story.location_x ?? null,
+        location_y: story.location_y ?? null,
       });
       if (error) {
         Alert.alert('Error', 'Could not save to highlights.');
@@ -442,7 +484,7 @@ const StoriesScreen: React.FC = () => {
   );
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         {/* ---------------------------------------------------- */}
         {/* Header: title + add + search + bell (matches sketch)  */}
@@ -625,14 +667,14 @@ const StoriesScreen: React.FC = () => {
         />
       )}
 
-      {/* Full-screen composer: add text before publishing a story */}
+      {/* Full-screen composer: add text/location/mentions before publishing */}
       {composerUri && (
         <StoryComposerModal
           uri={composerUri}
           mediaType={composerType}
           uploading={uploading}
           onCancel={() => setComposerUri(null)}
-          onPublish={(caption) => handlePublishStory(composerUri, composerType, caption)}
+          onPublish={(payload) => handlePublishStory(composerUri, composerType, payload)}
           screenW={SCREEN_W}
           screenH={SCREEN_H}
         />
@@ -743,7 +785,7 @@ const MyStoryBubble: React.FC<{
         >
           <View style={styles.menuSheet}>
             <Text style={styles.menuSheetTitle}>Choose a highlight</Text>
-            {HIGHLIGHT_TITLES.map((title) => (
+            {HIGHLIGHT_TITLES.map((title: string) => (
               <TouchableOpacity
                 key={title}
                 style={styles.menuItem}
@@ -760,205 +802,6 @@ const MyStoryBubble: React.FC<{
         </TouchableOpacity>
       </Modal>
     </View>
-  );
-};
-
-// ---------------------------------------------------------------------
-// Full-screen story viewer, sized to device screen, with like
-// ---------------------------------------------------------------------
-
-const StoryViewerModal: React.FC<{
-  group: FriendStoryGroup;
-  onClose: () => void;
-  onViewed: (storyId: string) => void;
-  onToggleLike: (story: StoryRow) => void;
-  screenW: number;
-  screenH: number;
-}> = ({ group, onClose, onViewed, onToggleLike, screenW, screenH }) => {
-  const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
-  const [index, setIndex] = useState(0);
-  const progress = useRef(new Animated.Value(0)).current;
-  const current = group.stories[index];
-
-  useEffect(() => {
-    if (!current) return;
-    onViewed(current.id);
-    progress.setValue(0);
-
-    const anim = Animated.timing(progress, {
-      toValue: 1,
-      duration: STORY_DURATION_MS,
-      useNativeDriver: false,
-    });
-
-    anim.start(({ finished }) => {
-      if (finished) goNext();
-    });
-
-    return () => anim.stop();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, current?.id]);
-
-  const goNext = () => {
-    if (index < group.stories.length - 1) {
-      setIndex((i) => i + 1);
-    } else {
-      onClose();
-    }
-  };
-
-  const goPrev = () => {
-    if (index > 0) setIndex((i) => i - 1);
-  };
-
-  if (!current) return null;
-
-  return (
-    <Modal visible animationType="fade" onRequestClose={onClose}>
-      <View style={[styles.viewerContainer, { width: screenW, height: screenH }]}>
-        <View style={styles.progressRow}>
-          {group.stories.map((s, i) => (
-            <View key={s.id} style={styles.progressTrack}>
-              <Animated.View
-                style={[
-                  styles.progressFill,
-                  {
-                    width:
-                      i < index
-                        ? '100%'
-                        : i === index
-                        ? progress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] })
-                        : '0%',
-                  },
-                ]}
-              />
-            </View>
-          ))}
-        </View>
-
-        <View style={styles.viewerHeader}>
-          <Avatar emoji={group.emoji} color={group.color} size={34} />
-          <Text style={styles.viewerName}>{group.friendName}</Text>
-          <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-            <X size={20} color="#fff" strokeWidth={2.5} />
-          </TouchableOpacity>
-        </View>
-
-        <Image
-          source={{ uri: current.media_url }}
-          style={[styles.viewerImage, { width: screenW, height: screenH }]}
-          resizeMode="cover"
-        />
-
-        {current.caption ? (
-          <View style={styles.captionWrap}>
-            <Text style={styles.captionText}>{current.caption}</Text>
-          </View>
-        ) : null}
-
-        {!group.isMine && (
-          <View style={styles.likeBar}>
-            <TouchableOpacity style={styles.likeBtn} onPress={() => onToggleLike(current)}>
-              <Heart
-                size={26}
-                color={current.liked_by_me ? colors.danger ?? '#ff3b30' : '#fff'}
-                fill={current.liked_by_me ? colors.danger ?? '#ff3b30' : 'transparent'}
-                strokeWidth={2}
-              />
-              {!!current.like_count && (
-                <Text style={styles.likeCountText}>{current.like_count}</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        )}
-
-        <View style={styles.tapZones}>
-          <TouchableOpacity style={styles.tapZoneLeft} onPress={goPrev} />
-          <TouchableOpacity style={styles.tapZoneRight} onPress={goNext} />
-        </View>
-      </View>
-    </Modal>
-  );
-};
-
-// ---------------------------------------------------------------------
-// Full-screen story composer: preview media at device size, add text
-// ---------------------------------------------------------------------
-
-const StoryComposerModal: React.FC<{
-  uri: string;
-  mediaType: 'image' | 'video';
-  uploading: boolean;
-  onCancel: () => void;
-  onPublish: (caption: string) => void;
-  screenW: number;
-  screenH: number;
-}> = ({ uri, mediaType, uploading, onCancel, onPublish, screenW, screenH }) => {
-  const { colors } = useTheme();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
-  const [caption, setCaption] = useState('');
-  const [textMode, setTextMode] = useState(false);
-
-  return (
-    <Modal visible animationType="slide" onRequestClose={onCancel}>
-      <KeyboardAvoidingView
-        style={[styles.viewerContainer, { width: screenW, height: screenH }]}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <Image
-          source={{ uri }}
-          style={[styles.viewerImage, { width: screenW, height: screenH }]}
-          resizeMode="cover"
-        />
-
-        <View style={styles.composerHeader}>
-          <TouchableOpacity onPress={onCancel} style={styles.closeBtn}>
-            <X size={22} color="#fff" strokeWidth={2.5} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.closeBtn} onPress={() => setTextMode((v) => !v)}>
-            <TypeIcon size={20} color="#fff" strokeWidth={2.5} />
-          </TouchableOpacity>
-        </View>
-
-        {textMode && (
-          <View style={styles.composerTextWrap}>
-            <TextInput
-              style={styles.composerTextInput}
-              placeholder="Add text..."
-              placeholderTextColor="rgba(255,255,255,0.7)"
-              value={caption}
-              onChangeText={setCaption}
-              multiline
-              autoFocus
-            />
-          </View>
-        )}
-
-        {!!caption && !textMode && (
-          <View style={styles.captionWrap}>
-            <Text style={styles.captionText}>{caption}</Text>
-          </View>
-        )}
-
-        <View style={styles.composerFooter}>
-          <TouchableOpacity
-            style={styles.publishBtn}
-            onPress={() => onPublish(caption)}
-            disabled={uploading}
-          >
-            {uploading ? (
-              <ActivityIndicator color={colors.bg} size="small" />
-            ) : (
-              <>
-                <Send size={16} color={colors.bg} strokeWidth={2.5} />
-                <Text style={styles.publishBtnText}>Share to story</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
   );
 };
 
@@ -994,24 +837,40 @@ const SearchModal: React.FC<{
     }
     debounceRef.current = setTimeout(async () => {
       setSearching(true);
-      const { data } = await supabase
-        .from('profiles')
-        .select(
-          'id, name, username, emoji, avatar_color, is_private, friends:friendships!friendships_friend_id_fkey(status)'
-        )
-        .or(`name.ilike.%${query}%,username.ilike.%${query}%`)
-        .neq('id', currentUserId ?? '')
-        .limit(20);
+      // Friendship status is checked from BOTH directions: the
+      // current user may have sent the request (requester_id) or
+      // received it (friend_id). The previous query only joined on
+      // friend_id, so a friendship the current user had initiated
+      // was invisible here and those users showed an "Add" button
+      // even though they were already friends (or pending).
+      const [asRequester, asTarget] = await Promise.all([
+        supabase
+          .from('profiles')
+          .select('id, name, username, emoji, avatar_color, is_private')
+          .or(`name.ilike.%${query}%,username.ilike.%${query}%`)
+          .neq('id', currentUserId ?? '')
+          .limit(20),
+        supabase
+          .from('friendships')
+          .select('requester_id, friend_id, status')
+          .or(`requester_id.eq.${currentUserId ?? ''},friend_id.eq.${currentUserId ?? ''}`)
+          .eq('status', 'accepted'),
+      ]);
 
-      if (data) {
+      if (asRequester.data) {
+        const friendIds = new Set<string>(
+          (asTarget.data ?? []).map((f: any) =>
+            f.requester_id === currentUserId ? f.friend_id : f.requester_id
+          )
+        );
         setResults(
-          data.map((u: any) => ({
+          asRequester.data.map((u: any) => ({
             id: u.id,
             name: u.name,
             username: u.username,
             emoji: u.emoji ?? '🙂',
             color: u.avatar_color ?? colors.primary,
-            is_friend: Array.isArray(u.friends) && u.friends.some((f: any) => f.status === 'accepted'),
+            is_friend: friendIds.has(u.id),
             is_private: !!u.is_private,
           }))
         );
@@ -1026,11 +885,15 @@ const SearchModal: React.FC<{
 
   const sendFriendRequest = async (targetId: string) => {
     if (!currentUserId) return;
-    await supabase.from('friendships').insert({
+    const { error } = await supabase.from('friendships').insert({
       requester_id: currentUserId,
       friend_id: targetId,
       status: 'pending',
     });
+    if (error) {
+      Alert.alert('Error', 'Could not send friend request.');
+      return;
+    }
     Alert.alert('Request sent', 'Your friend request has been sent.');
   };
 
@@ -1111,6 +974,8 @@ const NotificationsModal: React.FC<{
         return `${n.actor_name} sent you a friend request`;
       case 'new_story':
         return `${n.actor_name} posted a new story`;
+      case 'mention':
+        return `${n.actor_name} mentioned you in a story`;
       default:
         return '';
     }
@@ -1123,6 +988,7 @@ const NotificationsModal: React.FC<{
       case 'follow_request':
         return <UserPlus size={16} color={colors.primary} strokeWidth={2.5} />;
       case 'new_story':
+      case 'mention':
         return <Star size={16} color={colors.primary} strokeWidth={2.5} />;
       default:
         return null;
@@ -1321,94 +1187,6 @@ const makeStyles = (colors: ColorScheme) => StyleSheet.create({
     paddingVertical: spacing.md,
   },
   menuItemText: { ...typography.body, color: colors.text, fontWeight: '600' },
-
-  viewerContainer: { flex: 1, backgroundColor: '#000' },
-  progressRow: {
-    flexDirection: 'row',
-    gap: 4,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.md,
-  },
-  progressTrack: {
-    flex: 1,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    overflow: 'hidden',
-  },
-  progressFill: { height: '100%', backgroundColor: '#fff' },
-  viewerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-    gap: spacing.sm,
-  },
-  viewerName: { color: '#fff', fontWeight: '700', flex: 1 },
-  closeBtn: { padding: spacing.sm },
-  viewerImage: { position: 'absolute', top: 0, left: 0 },
-  captionWrap: {
-    position: 'absolute',
-    bottom: 100,
-    left: spacing.lg,
-    right: spacing.lg,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    borderRadius: radius.md,
-    padding: spacing.sm,
-  },
-  captionText: { color: '#fff', ...typography.body },
-  likeBar: {
-    position: 'absolute',
-    bottom: 34,
-    right: spacing.lg,
-    alignItems: 'center',
-  },
-  likeBtn: { alignItems: 'center', gap: 2 },
-  likeCountText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-  tapZones: { ...StyleSheet.absoluteFillObject, flexDirection: 'row', top: 60 },
-  tapZoneLeft: { flex: 1 },
-  tapZoneRight: { flex: 2 },
-
-  composerHeader: {
-    position: 'absolute',
-    top: spacing.xl,
-    left: spacing.md,
-    right: spacing.md,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  composerTextWrap: {
-    position: 'absolute',
-    top: '40%',
-    left: spacing.lg,
-    right: spacing.lg,
-  },
-  composerTextInput: {
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: '700',
-    textAlign: 'center',
-    backgroundColor: 'rgba(0,0,0,0.25)',
-    borderRadius: radius.md,
-    padding: spacing.md,
-  },
-  composerFooter: {
-    position: 'absolute',
-    bottom: spacing.xl,
-    left: spacing.lg,
-    right: spacing.lg,
-    alignItems: 'center',
-  },
-  publishBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    backgroundColor: '#fff',
-    borderRadius: radius.lg,
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.md,
-  },
-  publishBtnText: { color: colors.bg, fontWeight: '800' },
 
   modalSafe: { flex: 1, backgroundColor: colors.bg },
   modalHeaderRow: {

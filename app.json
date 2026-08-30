@@ -54,7 +54,8 @@
       "expo-location",
       "expo-contacts",
       "expo-calendar",
-      "expo-font"
+      "expo-font",
+      "expo-video"
     ],
     "extra": {
       "eas": {
