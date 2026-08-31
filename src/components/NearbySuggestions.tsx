@@ -1,7 +1,9 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import * as Location from 'expo-location';
-import { colors, radius, spacing, typography } from '../theme/theme';
+import { radius, spacing, typography } from '../theme/theme';
+import type { ColorScheme } from '../theme/theme';
+import { useTheme } from '../context/ThemeContext';
 import Avatar from './Avatar';
 import { Card, SectionHeader } from './Card';
 import { supabase } from '../utils/supabase';
@@ -17,6 +19,9 @@ type NearbyPerson = {
 // Ekranning istalgan joyiga qo'yish mumkin bo'lgan mustaqil komponent,
 // masalan FriendsListScreen yoki HomeScreen yuqorisiga.
 const NearbySuggestions: React.FC = () => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'denied' | 'error'>('idle');
   const [people, setPeople] = useState<NearbyPerson[]>([]);
   const [requestedIds, setRequestedIds] = useState<Set<string>>(new Set());
@@ -86,7 +91,7 @@ const NearbySuggestions: React.FC = () => {
     } catch (e) {
       setStatus('error');
     }
-  }, []);
+  }, [colors.primary]);
 
   useEffect(() => {
     loadNearby();
@@ -180,28 +185,29 @@ const NearbySuggestions: React.FC = () => {
   );
 };
 
-const styles = StyleSheet.create({
-  personCard: {
-    width: 140,
-    marginRight: spacing.sm,
-    alignItems: 'center',
-    paddingVertical: spacing.md,
-  },
-  personName: { ...typography.bodyBold, color: colors.text, marginTop: spacing.sm, textAlign: 'center' },
-  personDistance: { ...typography.small, color: colors.textFaint, marginTop: 2 },
-  addBtn: {
-    marginTop: spacing.sm,
-    backgroundColor: colors.primary,
-    paddingVertical: 8,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.pill,
-    width: '100%',
-  },
-  addBtnDisabled: { backgroundColor: colors.cardAlt },
-  addBtnText: { ...typography.small, color: colors.bg, fontWeight: '700', textAlign: 'center' },
-  emptyText: { ...typography.body, color: colors.textFaint, marginTop: spacing.sm },
-  retryBtn: { marginTop: spacing.sm, alignSelf: 'flex-start' },
-  retryBtnText: { ...typography.caption, color: colors.primary, fontWeight: '700' },
-});
+const makeStyles = (colors: ColorScheme) =>
+  StyleSheet.create({
+    personCard: {
+      width: 140,
+      marginRight: spacing.sm,
+      alignItems: 'center',
+      paddingVertical: spacing.md,
+    },
+    personName: { ...typography.bodyBold, color: colors.text, marginTop: spacing.sm, textAlign: 'center' },
+    personDistance: { ...typography.small, color: colors.textFaint, marginTop: 2 },
+    addBtn: {
+      marginTop: spacing.sm,
+      backgroundColor: colors.primary,
+      paddingVertical: 8,
+      paddingHorizontal: spacing.sm,
+      borderRadius: radius.pill,
+      width: '100%',
+    },
+    addBtnDisabled: { backgroundColor: colors.cardAlt },
+    addBtnText: { ...typography.small, color: colors.bg, fontWeight: '700', textAlign: 'center' },
+    emptyText: { ...typography.body, color: colors.textFaint, marginTop: spacing.sm },
+    retryBtn: { marginTop: spacing.sm, alignSelf: 'flex-start' },
+    retryBtnText: { ...typography.caption, color: colors.primary, fontWeight: '700' },
+  });
 
 export default NearbySuggestions;

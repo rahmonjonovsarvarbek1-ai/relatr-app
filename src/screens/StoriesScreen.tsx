@@ -50,7 +50,7 @@ import {
   type StoryTextSticker,
   type StoryMentionSticker,
   type StoryLocationSticker,
-} from './storyTypes';
+} from '../types/storyTypes';
 
 // ---------------------------------------------------------------------
 // Screen
@@ -128,35 +128,38 @@ const StoriesScreen: React.FC = () => {
     setLoading(false);
   }, [currentUserId]);
 
-  const loadHighlights = useCallback(async () => {
-    if (!currentUserId) return;
-    // Highlights are permanent, so this query intentionally does not
-    // filter on expires_at at all (unlike loadStories above).
-    const { data, error } = await supabase
-      .from('stories')
-      .select('*')
-      .eq('owner_id', currentUserId)
-      .eq('is_highlight', true)
-      .order('created_at', { ascending: true });
+ const loadHighlights = useCallback(async () => {
+  if (!currentUserId) return;
+  
+  const { data, error } = await supabase
+    .from('stories')
+    .select('*')
+    .eq('owner_id', currentUserId)
+    .eq('is_highlight', true)
+    .order('created_at', { ascending: true });
 
-    if (error || !data) return;
+  // SHU YERGA LOG QO'SHIB KO'RING:
+  console.log("DEBUG HIGHLIGHTS:", data, "ERROR:", error);
 
-    const byTitle = new Map<string, StoryRow[]>();
-    (data as StoryRow[]).forEach((s) => {
-      const key = s.highlight_title ?? 'Highlight';
-      const list = byTitle.get(key) ?? [];
-      list.push(s);
-      byTitle.set(key, list);
-    });
+  if (error || !data) return;
 
-    const groups: HighlightGroup[] = Array.from(byTitle.entries()).map(([title, stories]) => ({
-      id: title,
-      title,
-      coverUrl: stories[0].media_url,
-      stories,
-    }));
-    setHighlights(groups);
-  }, [currentUserId]);
+  const byTitle = new Map<string, StoryRow[]>();
+  (data as StoryRow[]).forEach((s) => {
+    const key = s.highlight_title ?? 'Highlight';
+    const list = byTitle.get(key) ?? [];
+    list.push(s);
+    byTitle.set(key, list);
+  });
+
+  const groups: HighlightGroup[] = Array.from(byTitle.entries()).map(([title, stories]) => ({
+    id: title,
+    title,
+    coverUrl: stories[0].media_url,
+    stories,
+  }));
+  
+  setHighlights(groups);
+}, [currentUserId]);
 
   const loadViewedIds = useCallback(async () => {
     if (!currentUserId) return;
@@ -296,9 +299,9 @@ const StoriesScreen: React.FC = () => {
       const fileExt = uri.split('.').pop() ?? (mediaType === 'video' ? 'mp4' : 'jpg');
       const fileName = `${currentUserId}/${Date.now()}.${fileExt}`;
 
-      const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: 'base64' as const,
-      });
+      // YANGI KOD (Tavsiya etiladi):
+      const file = new FileSystem.File(uri);
+      const base64 = await file.base64();
       const arrayBuffer = decode(base64);
 
       const { error: uploadError } = await supabase.storage

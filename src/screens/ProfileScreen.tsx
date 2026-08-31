@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -17,7 +17,9 @@ import {
   FlatList,
 } from 'react-native';
 import { useApp } from '../context/AppContext';
-import { colors, radius, spacing, typography, avatarPalette } from '../theme/theme';
+import { radius, spacing, typography, avatarPalette } from '../theme/theme';
+import type { ColorScheme } from '../theme/theme';
+import { useTheme } from '../context/ThemeContext';
 import Avatar from '../components/Avatar';
 import Chip from '../components/Chip';
 import { Ionicons } from '@expo/vector-icons';
@@ -39,6 +41,9 @@ const TERMS_URL = 'https://mongom.app/terms'; // haqiqiy URL bilan almashtiring
 const PRIVACY_URL = 'https://mongom.app/privacy'; // haqiqiy URL bilan almashtiring
 
 const ProfileScreen: React.FC = () => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+
   const { profile, friends, updateProfile } = useApp();
   const { signOut } = useAuth();
   const settings = useProfileSettings();
@@ -444,7 +449,7 @@ const ProfileScreen: React.FC = () => {
             activeOpacity={0.65}
             onPress={() => setStatModal('friends')}
           >
-            <StatBlockInner value={stats.total} label="Friends" />
+            <StatBlockInner value={stats.total} label="Friends" colors={colors} />
           </TouchableOpacity>
           <View style={styles.statDivider} />
           <TouchableOpacity
@@ -452,7 +457,7 @@ const ProfileScreen: React.FC = () => {
             activeOpacity={0.65}
             onPress={() => setStatModal('favorites')}
           >
-            <StatBlockInner value={stats.favorites} label="Favorites" />
+            <StatBlockInner value={stats.favorites} label="Favorites" colors={colors} />
           </TouchableOpacity>
           <View style={styles.statDivider} />
           <TouchableOpacity
@@ -460,7 +465,7 @@ const ProfileScreen: React.FC = () => {
             activeOpacity={0.65}
             onPress={() => setStatModal('categories')}
           >
-            <StatBlockInner value={stats.categories} label="Categories" />
+            <StatBlockInner value={stats.categories} label="Categories" colors={colors} />
           </TouchableOpacity>
         </View>
 
@@ -486,14 +491,16 @@ const ProfileScreen: React.FC = () => {
 
         <View style={styles.divider} />
 
-        {profile.birthday && <DetailRow icon="gift-outline" label={`Birthday · ${formatFullDate(profile.birthday)}`} />}
+        {profile.birthday && (
+          <DetailRow icon="gift-outline" label={`Birthday · ${formatFullDate(profile.birthday)}`} colors={colors} />
+        )}
 
         <Text style={styles.sectionLabel}>SETTINGS</Text>
         <View style={styles.settingsGroup}>
-          <SettingRow icon="notifications-outline" label="Notifications" onPress={() => goToPage('notifications')} />
-          <SettingRow icon="cloud-upload-outline" label="Contact & Calendar Sync" onPress={() => goToPage('calendar')} />
-          <SettingRow icon="lock-closed-outline" label="Privacy" onPress={() => goToPage('privacy')} />
-          <SettingRow icon="information-circle-outline" label="About" onPress={() => goToPage('about')} last />
+          <SettingRow icon="notifications-outline" label="Notifications" onPress={() => goToPage('notifications')} colors={colors} />
+          <SettingRow icon="cloud-upload-outline" label="Contact & Calendar Sync" onPress={() => goToPage('calendar')} colors={colors} />
+          <SettingRow icon="lock-closed-outline" label="Privacy" onPress={() => goToPage('privacy')} colors={colors} />
+          <SettingRow icon="information-circle-outline" label="About" onPress={() => goToPage('about')} colors={colors} last />
         </View>
 
         <View style={{ height: spacing.xxl }} />
@@ -647,63 +654,64 @@ const ProfileScreen: React.FC = () => {
               <>
                 <Text style={styles.sectionLabel}>PREFERENCES</Text>
                 <View style={styles.settingsGroup}>
-                  <SettingRow icon="notifications-outline" label="Notifications" onPress={() => setSettingsPage('notifications')} />
-                  <SettingRow icon="cloud-upload-outline" label="Contact & Calendar Sync" onPress={() => setSettingsPage('calendar')} />
-                  <SettingRow icon="lock-closed-outline" label="Privacy" onPress={() => setSettingsPage('privacy')} last />
+                  <SettingRow icon="notifications-outline" label="Notifications" onPress={() => setSettingsPage('notifications')} colors={colors} />
+                  <SettingRow icon="cloud-upload-outline" label="Contact & Calendar Sync" onPress={() => setSettingsPage('calendar')} colors={colors} />
+                  <SettingRow icon="lock-closed-outline" label="Privacy" onPress={() => setSettingsPage('privacy')} colors={colors} last />
                 </View>
 
                 <Text style={styles.sectionLabel}>SUPPORT</Text>
                 <View style={styles.settingsGroup}>
-                  <SettingRow icon="information-circle-outline" label="About" onPress={() => setSettingsPage('about')} last />
+                  <SettingRow icon="information-circle-outline" label="About" onPress={() => setSettingsPage('about')} colors={colors} last />
                 </View>
 
                 <Text style={styles.sectionLabel}>ACCOUNT</Text>
                 <View style={styles.settingsGroup}>
-                  <SettingRow icon="log-out-outline" label="Log out" onPress={confirmLogOut} danger />
-                  <SettingRow icon="trash-outline" label="Delete account" onPress={confirmDeleteAccount} danger last />
+                  <SettingRow icon="log-out-outline" label="Log out" onPress={confirmLogOut} colors={colors} danger />
+                  <SettingRow icon="trash-outline" label="Delete account" onPress={confirmDeleteAccount} colors={colors} danger last />
                 </View>
               </>
             )}
 
             {settingsPage === 'notifications' && (
               <View style={styles.settingsGroup}>
-                <ToggleRow label="Push notifications" value={profile.pushEnabled} onChange={setPushEnabled} />
-                <ToggleRow label="Messages" value={profile.messageNotif} onChange={setMessageNotif} />
-                <ToggleRow label="Likes & comments" value={profile.likesNotif} onChange={setLikesNotif} />
-                <ToggleRow label="Sound" value={profile.soundEnabled} onChange={setSoundEnabled} last />
+                <ToggleRow label="Push notifications" value={profile.pushEnabled} onChange={setPushEnabled} colors={colors} />
+                <ToggleRow label="Messages" value={profile.messageNotif} onChange={setMessageNotif} colors={colors} />
+                <ToggleRow label="Likes & comments" value={profile.likesNotif} onChange={setLikesNotif} colors={colors} />
+                <ToggleRow label="Sound" value={profile.soundEnabled} onChange={setSoundEnabled} colors={colors} last />
               </View>
             )}
 
             {settingsPage === 'calendar' && (
               <View style={styles.settingsGroup}>
-                <ToggleRow label="Sync contacts" value={profile.syncContacts} onChange={setSyncContacts} />
-                <ToggleRow label="Sync calendar" value={profile.syncCalendar} onChange={setSyncCalendar} last />
+                <ToggleRow label="Sync contacts" value={profile.syncContacts} onChange={setSyncContacts} colors={colors} />
+                <ToggleRow label="Sync calendar" value={profile.syncCalendar} onChange={setSyncCalendar} colors={colors} last />
               </View>
             )}
 
             {settingsPage === 'privacy' && (
               <>
                 <View style={styles.settingsGroup}>
-                  <ToggleRow label="Private account" value={profile.privateAccount} onChange={setPrivateAccount} />
-                  <ToggleRow label="Show activity status" value={profile.activityStatus} onChange={setActivityStatus} last />
+                  <ToggleRow label="Private account" value={profile.privateAccount} onChange={setPrivateAccount} colors={colors} />
+                  <ToggleRow label="Show activity status" value={profile.activityStatus} onChange={setActivityStatus} colors={colors} last />
                 </View>
                 <View style={styles.settingsGroup}>
                   <SettingRow
                     icon="shield-checkmark-outline"
                     label={`Two-Factor Authentication${profile.mfaEnabled ? ' · On' : ''}`}
                     onPress={() => goToPage('2fa')}
+                    colors={colors}
                   />
-                  <SettingRow icon="key-outline" label="Change password" onPress={() => goToPage('password')} />
-                  <SettingRow icon="ban-outline" label="Blocked users" onPress={() => goToPage('blocked')} last />
+                  <SettingRow icon="key-outline" label="Change password" onPress={() => goToPage('password')} colors={colors} />
+                  <SettingRow icon="ban-outline" label="Blocked users" onPress={() => goToPage('blocked')} colors={colors} last />
                 </View>
               </>
             )}
 
             {settingsPage === 'about' && (
               <View style={styles.settingsGroup}>
-                <DetailRow icon="apps-outline" label="Version 1.0.0" />
-                <SettingRow icon="document-text-outline" label="Terms of Service" onPress={() => Linking.openURL(TERMS_URL)} />
-                <SettingRow icon="shield-outline" label="Privacy Policy" onPress={() => Linking.openURL(PRIVACY_URL)} last />
+                <DetailRow icon="apps-outline" label="Version 1.0.0" colors={colors} />
+                <SettingRow icon="document-text-outline" label="Terms of Service" onPress={() => Linking.openURL(TERMS_URL)} colors={colors} />
+                <SettingRow icon="shield-outline" label="Privacy Policy" onPress={() => Linking.openURL(PRIVACY_URL)} colors={colors} last />
               </View>
             )}
 
@@ -860,12 +868,19 @@ const ProfileScreen: React.FC = () => {
   );
 };
 
-const DetailRow: React.FC<{ icon: keyof typeof Ionicons.glyphMap; label: string }> = ({ icon, label }) => (
-  <View style={styles.detailRow}>
-    <Ionicons name={icon} size={15} color={colors.textDim} />
-    <Text style={styles.detailText}>{label}</Text>
-  </View>
-);
+const DetailRow: React.FC<{ icon: keyof typeof Ionicons.glyphMap; label: string; colors: ColorScheme }> = ({
+  icon,
+  label,
+  colors,
+}) => {
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  return (
+    <View style={styles.detailRow}>
+      <Ionicons name={icon} size={15} color={colors.textDim} />
+      <Text style={styles.detailText}>{label}</Text>
+    </View>
+  );
+};
 
 const SettingRow: React.FC<{
   icon: keyof typeof Ionicons.glyphMap;
@@ -873,207 +888,219 @@ const SettingRow: React.FC<{
   onPress?: () => void;
   danger?: boolean;
   last?: boolean;
-}> = ({ icon, label, onPress, danger, last }) => (
-  <TouchableOpacity
-    style={[styles.settingRow, !last && styles.settingRowBorder]}
-    onPress={onPress}
-    activeOpacity={0.6}
-  >
-    <Ionicons name={icon} size={18} color={danger ? '#FF3B30' : colors.textDim} />
-    <Text style={[styles.settingText, danger && styles.settingTextDanger]}>{label}</Text>
-    <View style={{ flex: 1 }} />
-    {!danger && <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />}
-  </TouchableOpacity>
-);
+  colors: ColorScheme;
+}> = ({ icon, label, onPress, danger, last, colors }) => {
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  return (
+    <TouchableOpacity
+      style={[styles.settingRow, !last && styles.settingRowBorder]}
+      onPress={onPress}
+      activeOpacity={0.6}
+    >
+      <Ionicons name={icon} size={18} color={danger ? '#FF3B30' : colors.textDim} />
+      <Text style={[styles.settingText, danger && styles.settingTextDanger]}>{label}</Text>
+      <View style={{ flex: 1 }} />
+      {!danger && <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />}
+    </TouchableOpacity>
+  );
+};
 
 const ToggleRow: React.FC<{
   label: string;
   value: boolean;
   onChange: (v: boolean) => void;
   last?: boolean;
-}> = ({ label, value, onChange, last }) => (
-  <View style={[styles.settingRow, !last && styles.settingRowBorder]}>
-    <Text style={styles.settingText}>{label}</Text>
-    <View style={{ flex: 1 }} />
-    <Switch
-      value={value}
-      onValueChange={onChange}
-      trackColor={{ false: colors.border, true: colors.primary }}
-      thumbColor="#FFFFFF"
-    />
-  </View>
-);
+  colors: ColorScheme;
+}> = ({ label, value, onChange, last, colors }) => {
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  return (
+    <View style={[styles.settingRow, !last && styles.settingRowBorder]}>
+      <Text style={styles.settingText}>{label}</Text>
+      <View style={{ flex: 1 }} />
+      <Switch
+        value={value}
+        onValueChange={onChange}
+        trackColor={{ false: colors.border, true: colors.primary }}
+        thumbColor="#FFFFFF"
+      />
+    </View>
+  );
+};
 
-const StatBlockInner: React.FC<{ value: number; label: string }> = ({ value, label }) => (
-  <View style={styles.statBlockInner}>
-    <Text style={styles.statValue}>{value}</Text>
-    <Text style={styles.statLabel}>{label}</Text>
-  </View>
-);
+const StatBlockInner: React.FC<{ value: number; label: string; colors: ColorScheme }> = ({ value, label, colors }) => {
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  return (
+    <View style={styles.statBlockInner}>
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+    </View>
+  );
+};
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.bg },
-  scroll: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: 120 },
+const makeStyles = (colors: ColorScheme) =>
+  StyleSheet.create({
+    safe: { flex: 1, backgroundColor: colors.bg },
+    scroll: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: 120 },
 
-  topBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing.sm,
-  },
+    topBar: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: spacing.sm,
+    },
 
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginTop: spacing.sm,
-  },
-  name: { ...typography.h2, color: colors.text, fontWeight: '700' },
-  username: { ...typography.body, color: colors.textDim, marginTop: 2 },
-  meta: { ...typography.caption, color: colors.textFaint, marginTop: 4 },
+    headerRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+      marginTop: spacing.sm,
+    },
+    name: { ...typography.h2, color: colors.text, fontWeight: '700' },
+    username: { ...typography.body, color: colors.textDim, marginTop: 2 },
+    meta: { ...typography.caption, color: colors.textFaint, marginTop: 4 },
 
-  avatarImage: { width: 68, height: 68, borderRadius: 34 },
-  avatarImageLarge: { width: 72, height: 72, borderRadius: 36 },
-  avatarEditBadge: {
-    position: 'absolute',
-    bottom: -2,
-    right: -2,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: colors.bg,
-  },
-  removePhotoText: { ...typography.caption, color: '#FF3B30' },
+    avatarImage: { width: 68, height: 68, borderRadius: 34 },
+    avatarImageLarge: { width: 72, height: 72, borderRadius: 36 },
+    avatarEditBadge: {
+      position: 'absolute',
+      bottom: -2,
+      right: -2,
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 2,
+      borderColor: colors.bg,
+    },
+    removePhotoText: { ...typography.caption, color: '#FF3B30' },
 
-  bio: { ...typography.body, color: colors.text, marginTop: spacing.md, lineHeight: 20 },
+    bio: { ...typography.body, color: colors.text, marginTop: spacing.md, lineHeight: 20 },
 
-  statCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.cardAlt,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginTop: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  statBlock: { flex: 1 },
-  statBlockInner: { alignItems: 'center' },
-  statValue: { ...typography.h3, color: colors.text, fontWeight: '700' },
-  statLabel: { ...typography.caption, color: colors.textFaint, marginTop: 2 },
-  statDivider: { width: StyleSheet.hairlineWidth, height: '70%', backgroundColor: colors.border },
+    statCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.cardAlt,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginTop: spacing.lg,
+      paddingVertical: spacing.md,
+    },
+    statBlock: { flex: 1 },
+    statBlockInner: { alignItems: 'center' },
+    statValue: { ...typography.h3, color: colors.text, fontWeight: '700' },
+    statLabel: { ...typography.caption, color: colors.textFaint, marginTop: 2 },
+    statDivider: { width: StyleSheet.hairlineWidth, height: '70%', backgroundColor: colors.border },
 
-  editBtn: {
-    flexDirection: 'row',
-    marginTop: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingVertical: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  editBtnText: { ...typography.bodyBold, color: colors.text },
+    editBtn: {
+      flexDirection: 'row',
+      marginTop: spacing.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: radius.md,
+      paddingVertical: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    editBtnText: { ...typography.bodyBold, color: colors.text },
 
-  igRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.md },
-  igText: { ...typography.caption, color: colors.textDim, marginLeft: 6 },
+    igRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.md },
+    igText: { ...typography.caption, color: colors.textDim, marginLeft: 6 },
 
-  interestsRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: spacing.md },
+    interestsRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: spacing.md },
 
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginTop: spacing.lg },
+    divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border, marginTop: spacing.lg },
 
-  detailRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm, paddingHorizontal: spacing.md },
-  detailText: { ...typography.body, color: colors.text, marginLeft: spacing.sm },
+    detailRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm, paddingHorizontal: spacing.md },
+    detailText: { ...typography.body, color: colors.text, marginLeft: spacing.sm },
 
-  sectionLabel: {
-    ...typography.caption,
-    color: colors.textFaint,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    marginTop: spacing.xl,
-    marginBottom: spacing.xs,
-    marginLeft: 2,
-  },
-  settingsGroup: {
-    backgroundColor: colors.cardAlt,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    overflow: 'hidden',
-  },
-  settingRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm + 6, paddingHorizontal: spacing.md },
-  settingRowBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  settingText: { ...typography.body, color: colors.text, marginLeft: spacing.sm },
-  settingTextDanger: { color: '#FF3B30' },
+    sectionLabel: {
+      ...typography.caption,
+      color: colors.textFaint,
+      fontWeight: '700',
+      letterSpacing: 0.5,
+      marginTop: spacing.xl,
+      marginBottom: spacing.xs,
+      marginLeft: 2,
+    },
+    settingsGroup: {
+      backgroundColor: colors.cardAlt,
+      borderRadius: radius.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      overflow: 'hidden',
+    },
+    settingRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm + 6, paddingHorizontal: spacing.md },
+    settingRowBorder: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+    settingText: { ...typography.body, color: colors.text, marginLeft: spacing.sm },
+    settingTextDanger: { color: '#FF3B30' },
 
-  modalOverlay: { flex: 1, backgroundColor: '#000000AA', justifyContent: 'flex-end' },
-  modalCard: { backgroundColor: colors.bgElevated, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg, maxHeight: '90%' },
-  modalTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  modalTitle: { ...typography.h3, color: colors.text },
-  cancelText: { ...typography.body, color: colors.textDim },
-  doneText: { ...typography.bodyBold, color: colors.primary },
+    modalOverlay: { flex: 1, backgroundColor: '#000000AA', justifyContent: 'flex-end' },
+    modalCard: { backgroundColor: colors.bgElevated, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, padding: spacing.lg, maxHeight: '90%' },
+    modalTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    modalTitle: { ...typography.h3, color: colors.text },
+    cancelText: { ...typography.body, color: colors.textDim },
+    doneText: { ...typography.bodyBold, color: colors.primary },
 
-  label: { ...typography.caption, color: colors.textDim, marginTop: spacing.md, marginBottom: spacing.xs, fontWeight: '600' },
-  input: { backgroundColor: colors.cardAlt, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, color: colors.text, padding: spacing.md, ...typography.body },
-  wrapRow: { flexDirection: 'row', flexWrap: 'wrap' },
-  emojiOption: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.cardAlt, borderWidth: 1.5, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginRight: spacing.sm, marginBottom: spacing.sm },
-  emojiOptionActive: { borderColor: colors.primary, backgroundColor: colors.primary + '20' },
-  colorOption: { width: 32, height: 32, borderRadius: 16, marginRight: spacing.sm, marginBottom: spacing.sm },
-  colorOptionActive: { borderWidth: 3, borderColor: colors.text },
+    label: { ...typography.caption, color: colors.textDim, marginTop: spacing.md, marginBottom: spacing.xs, fontWeight: '600' },
+    input: { backgroundColor: colors.cardAlt, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, color: colors.text, padding: spacing.md, ...typography.body },
+    wrapRow: { flexDirection: 'row', flexWrap: 'wrap' },
+    emojiOption: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.cardAlt, borderWidth: 1.5, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginRight: spacing.sm, marginBottom: spacing.sm },
+    emojiOptionActive: { borderColor: colors.primary, backgroundColor: colors.primary + '20' },
+    colorOption: { width: 32, height: 32, borderRadius: 16, marginRight: spacing.sm, marginBottom: spacing.sm },
+    colorOptionActive: { borderWidth: 3, borderColor: colors.text },
 
-  birthdayToggle: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm, marginBottom: spacing.sm },
-  checkbox: { width: 20, height: 20, borderWidth: 1.5, borderColor: colors.border, borderRadius: 4, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cardAlt },
-  checkboxActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  checkboxDot: { width: 8, height: 8, borderRadius: 2, backgroundColor: colors.bg },
-  birthdayToggleText: { ...typography.body, color: colors.text, marginLeft: spacing.sm },
-  birthdayFieldsWrap: { marginTop: spacing.xs, marginBottom: spacing.sm },
+    birthdayToggle: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm, marginBottom: spacing.sm },
+    checkbox: { width: 20, height: 20, borderWidth: 1.5, borderColor: colors.border, borderRadius: 4, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cardAlt },
+    checkboxActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+    checkboxDot: { width: 8, height: 8, borderRadius: 2, backgroundColor: colors.bg },
+    birthdayToggleText: { ...typography.body, color: colors.text, marginLeft: spacing.sm },
+    birthdayFieldsWrap: { marginTop: spacing.xs, marginBottom: spacing.sm },
 
-  saveBtn: { backgroundColor: colors.primary, borderRadius: radius.pill, alignItems: 'center', paddingVertical: spacing.md, marginTop: spacing.lg },
-  saveBtnText: { ...typography.bodyBold, color: colors.bg },
+    saveBtn: { backgroundColor: colors.primary, borderRadius: radius.pill, alignItems: 'center', paddingVertical: spacing.md, marginTop: spacing.lg },
+    saveBtnText: { ...typography.bodyBold, color: colors.bg },
 
-  errorText: { ...typography.caption, color: '#FF3B30', marginTop: spacing.xs },
+    errorText: { ...typography.caption, color: '#FF3B30', marginTop: spacing.xs },
 
-  qrImage: { width: 200, height: 200, alignSelf: 'center', backgroundColor: '#FFFFFF', borderRadius: radius.md },
+    qrImage: { width: 200, height: 200, alignSelf: 'center', backgroundColor: '#FFFFFF', borderRadius: radius.md },
 
-  settingsSafe: { flex: 1, backgroundColor: colors.bg },
-  settingsTopBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  settingsBackBtn: { width: 24 },
-  settingsTitle: { ...typography.h3, color: colors.text, fontWeight: '700' },
-  settingsScroll: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: 60 },
+    settingsSafe: { flex: 1, backgroundColor: colors.bg },
+    settingsTopBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    settingsBackBtn: { width: 24 },
+    settingsTitle: { ...typography.h3, color: colors.text, fontWeight: '700' },
+    settingsScroll: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: 60 },
 
-  statListContent: { paddingBottom: 60 },
-  statRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: spacing.sm + 4,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  statRowPhoto: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.cardAlt },
-  statRowText: { ...typography.body, color: colors.text },
-  statRowSub: { ...typography.caption, color: colors.textFaint, marginTop: 2 },
-  statRowCount: { ...typography.bodyBold, color: colors.primary },
-  statEmptyWrap: { paddingVertical: spacing.xl, alignItems: 'center' },
-  statEmptyText: { ...typography.body, color: colors.textFaint },
-  categoryDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: colors.primary,
-    marginRight: spacing.sm,
-  },
-});
+    statListContent: { paddingBottom: 60 },
+    statRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: spacing.sm + 4,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    statRowPhoto: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.cardAlt },
+    statRowText: { ...typography.body, color: colors.text },
+    statRowSub: { ...typography.caption, color: colors.textFaint, marginTop: 2 },
+    statRowCount: { ...typography.bodyBold, color: colors.primary },
+    statEmptyWrap: { paddingVertical: spacing.xl, alignItems: 'center' },
+    statEmptyText: { ...typography.body, color: colors.textFaint },
+    categoryDot: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+      backgroundColor: colors.primary,
+      marginRight: spacing.sm,
+    },
+  });
 
 export default ProfileScreen;

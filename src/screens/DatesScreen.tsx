@@ -12,7 +12,9 @@ import {
   TextInput,
 } from 'react-native';
 import { useApp } from '../context/AppContext';
-import { colors, radius, spacing, typography } from '../theme/theme';
+import { radius, spacing, typography } from '../theme/theme';
+import type { ColorScheme } from '../theme/theme';
+import { useTheme } from '../context/ThemeContext';
 import Avatar from '../components/Avatar';
 import { Card, SectionHeader } from '../components/Card';
 import Chip from '../components/Chip';
@@ -44,9 +46,6 @@ interface FriendUpcomingItem {
   age: number | null;
 }
 
-// Nager.Date public holiday API doesn't require a key. Country list kept
-// short and focused on where this app's users mostly are; extend freely —
-// just make sure the edge function's COUNTRIES list matches.
 const COUNTRY_OPTIONS: { code: string; label: string }[] = [
   { code: 'GLOBAL', label: 'Global' },
   { code: 'UZ', label: 'Uzbekistan' },
@@ -57,6 +56,8 @@ const COUNTRY_OPTIONS: { code: string; label: string }[] = [
 ];
 
 const DatesScreen: React.FC = () => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const { friends } = useApp();
   const navigation = useNavigation<any>();
 
@@ -69,8 +70,6 @@ const DatesScreen: React.FC = () => {
   const [countryFilter, setCountryFilter] = useState('GLOBAL');
   const [worldSearch, setWorldSearch] = useState('');
 
-  // Guards async work started before unmount from touching state after
-  // the component is gone.
   const isMountedRef = useRef(true);
   useEffect(() => {
     isMountedRef.current = true;
@@ -91,12 +90,6 @@ const DatesScreen: React.FC = () => {
     setWorldSpecialDays((data as WorldHolidayRow[] | null ?? []).map(worldSpecialDayFromRow));
   }, []);
 
-  // Triggers the `sync-world-holidays` edge function, which pulls fresh
-  // data from the free Nager.Date API (https://date.nager.at) and upserts
-  // it into public.world_holidays. Safe to call often — the function
-  // itself only re-fetches from Nager when the local cache is stale, so
-  // this is cheap. Returns whether the sync reported a problem so callers
-  // can surface it.
   const syncFromNager = useCallback(async (): Promise<void> => {
     try {
       const { error } = await supabase.functions.invoke('sync-world-holidays', {
@@ -110,17 +103,12 @@ const DatesScreen: React.FC = () => {
         setSyncWarning(null);
       }
     } catch (e) {
-      // Non-fatal: we still show whatever is already cached in the table.
       if (!isMountedRef.current) return;
       console.error('sync-world-holidays invoke error:', e);
       setSyncWarning('Some special days may be out of date.');
     }
   }, []);
 
-  // Live-loaded from public.world_holidays (populated by the
-  // sync-world-holidays edge function, which calls the free Nager.Date
-  // API — no API key / OAuth token needed) with realtime updates so new
-  // holidays appear without a manual refresh.
   useEffect(() => {
     let cancelled = false;
 
@@ -128,8 +116,6 @@ const DatesScreen: React.FC = () => {
       setIsLoadingWorld(true);
       await fetchWorldHolidays();
       if (cancelled) return;
-      // Kick off a background sync so the table stays fresh; realtime
-      // subscription below will pick up any changes it makes.
       await syncFromNager();
       if (cancelled) return;
       setIsLoadingWorld(false);
@@ -154,8 +140,6 @@ const DatesScreen: React.FC = () => {
 
   const onRefresh = useCallback(async () => {
     setIsRefreshing(true);
-    // Force a re-sync on manual pull-to-refresh, bypassing the edge
-    // function's cooldown, since the user explicitly asked for fresh data.
     try {
       await supabase.functions.invoke('sync-world-holidays', {
         body: { year: new Date().getFullYear(), force: true },
@@ -192,9 +176,6 @@ const DatesScreen: React.FC = () => {
     return worldSpecialDays.filter((w) => {
       const countryCode = (w as WorldSpecialDay & { countryCode?: string }).countryCode ?? 'GLOBAL';
 
-      // Show a holiday if: no filter is active (GLOBAL tab shows
-      // everything), the holiday itself is GLOBAL, or it matches the
-      // selected country exactly.
       const matchesCountry =
         countryFilter === 'GLOBAL' || countryCode === 'GLOBAL' || countryCode === countryFilter;
       if (!matchesCountry) return false;
@@ -209,9 +190,6 @@ const DatesScreen: React.FC = () => {
       .map((w) => {
         const now = new Date();
         const currentYear = now.getFullYear();
-        // Build this year's occurrence; if it's already passed, roll to
-        // next year so "days until" is always non-negative, regardless of
-        // what daysUntilNextOccurrence does internally with the year.
         const thisYear = new Date(currentYear, w.month - 1, w.day);
         thisYear.setHours(0, 0, 0, 0);
         const today = new Date();
@@ -284,8 +262,6 @@ const DatesScreen: React.FC = () => {
           </View>
         )}
 
-        {/* GPS-based suggestions for nearby users who aren't friends yet.
-            Placed after "Coming up" and before the main dates list. */}
         <NearbySuggestions />
 
         <View style={styles.tabRow}>
@@ -429,7 +405,7 @@ const DatesScreen: React.FC = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: ColorScheme) => StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   scroll: { padding: spacing.lg },
   header: { ...typography.h1, color: colors.text },

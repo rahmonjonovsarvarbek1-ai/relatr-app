@@ -12,7 +12,9 @@ import {
   Image,
 } from 'react-native';
 import { useApp } from '../context/AppContext';
-import { colors, radius, spacing, typography, avatarPalette } from '../theme/theme';
+import { radius, spacing, typography, avatarPalette } from '../theme/theme';
+import type { ColorScheme } from '../theme/theme';
+import { useTheme } from '../context/ThemeContext';
 import Avatar from '../components/Avatar';
 import AvatarPicker from '../components/AvatarPicker';
 import Chip from '../components/Chip';
@@ -74,6 +76,8 @@ const SOCIAL_PLATFORMS = ['Instagram', 'Snapchat', 'TikTok', 'X', 'LinkedIn', 'W
 type EditSection = 'main' | 'personal' | 'contact' | 'social' | 'preferences';
 
 const FriendProfileScreen: React.FC = () => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const {
     friends,
     updateFriend,
@@ -1131,35 +1135,47 @@ const FriendProfileScreen: React.FC = () => {
   );
 };
 
-const DetailRow: React.FC<{ icon: any; label: string; last?: boolean }> = ({ icon, label, last }) => (
-  <View style={[styles.detailRow, !last && styles.settingRowBorder]}>
-    <Ionicons name={icon} size={16} color={colors.textDim} />
-    <Text style={styles.detailText}>{label}</Text>
-  </View>
-);
+const DetailRow: React.FC<{ icon: any; label: string; last?: boolean }> = ({ icon, label, last }) => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  return (
+    <View style={[styles.detailRow, !last && styles.settingRowBorder]}>
+      <Ionicons name={icon} size={16} color={colors.textDim} />
+      <Text style={styles.detailText}>{label}</Text>
+    </View>
+  );
+};
 
 const SettingRow: React.FC<{
   icon: any;
   label: string;
   onPress?: () => void;
   last?: boolean;
-}> = ({ icon, label, onPress, last }) => (
-  <TouchableOpacity style={[styles.settingRow, !last && styles.settingRowBorder]} onPress={onPress} activeOpacity={0.6}>
-    <Ionicons name={icon} size={18} color={colors.textDim} />
-    <Text style={styles.settingText}>{label}</Text>
-    <View style={{ flex: 1 }} />
-    <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
-  </TouchableOpacity>
-);
+}> = ({ icon, label, onPress, last }) => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  return (
+    <TouchableOpacity style={[styles.settingRow, !last && styles.settingRowBorder]} onPress={onPress} activeOpacity={0.6}>
+      <Ionicons name={icon} size={18} color={colors.textDim} />
+      <Text style={styles.settingText}>{label}</Text>
+      <View style={{ flex: 1 }} />
+      <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
+    </TouchableOpacity>
+  );
+};
 
-const StatBlock: React.FC<{ value: number; label: string }> = ({ value, label }) => (
-  <View style={styles.statBlock}>
-    <Text style={styles.statValue}>{value}</Text>
-    <Text style={styles.statLabel}>{label}</Text>
-  </View>
-);
+const StatBlock: React.FC<{ value: number; label: string }> = ({ value, label }) => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  return (
+    <View style={styles.statBlock}>
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+    </View>
+  );
+};
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: ColorScheme) => StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   scroll: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
 

@@ -10,7 +10,9 @@ import {
   Image,
 } from 'react-native';
 import { useApp } from '../context/AppContext';
-import { colors, radius, spacing, typography } from '../theme/theme';
+import { radius, spacing, typography } from '../theme/theme';
+import type { ColorScheme } from '../theme/theme';
+import { useTheme } from '../context/ThemeContext';
 import Avatar from '../components/Avatar';
 import Chip from '../components/Chip';
 import { useNavigation } from '@react-navigation/native';
@@ -34,6 +36,8 @@ const CATEGORIES: (RelationshipCategory | 'All')[] = [
 type SortMode = 'recent' | 'name' | 'upcoming';
 
 const FriendsListScreen: React.FC = () => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const { friends, updateFriend } = useApp();
   const navigation = useNavigation<any>();
   const [query, setQuery] = useState('');
@@ -295,17 +299,21 @@ const SortPill: React.FC<{ label: string; active: boolean; onPress: () => void }
   label,
   active,
   onPress,
-}) => (
-  <TouchableOpacity
-    onPress={onPress}
-    style={[styles.sortPill, active && styles.sortPillActive]}
-    activeOpacity={0.8}
-  >
-    <Text style={[styles.sortPillText, active && styles.sortPillTextActive]}>{label}</Text>
-  </TouchableOpacity>
-);
+}) => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      style={[styles.sortPill, active && styles.sortPillActive]}
+      activeOpacity={0.8}
+    >
+      <Text style={[styles.sortPillText, active && styles.sortPillTextActive]}>{label}</Text>
+    </TouchableOpacity>
+  );
+};
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: ColorScheme) => StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   headerRow: {
     flexDirection: 'row',

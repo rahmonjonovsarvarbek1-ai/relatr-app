@@ -1,10 +1,9 @@
 // components/LiquidGlassTabBar.tsx
-import React, { useRef, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { View, TouchableOpacity, StyleSheet, Platform, Dimensions } from 'react-native';
 import { BlurView } from 'expo-blur';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Path, Circle } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import Animated, {
   useSharedValue,
@@ -12,7 +11,7 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { colors } from '../theme/theme';
+import { useTheme } from '../context/ThemeContext';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const TAB_BAR_HORIZONTAL_MARGIN = 16;
@@ -55,6 +54,8 @@ const StoryIcon: React.FC<{ size?: number; color?: string }> = ({ size = 24, col
 const AnimatedBlurView = Animated.createAnimatedComponent(BlurView);
 
 const LiquidGlassTabBar: React.FC<BottomTabBarProps> = ({ state, descriptors, navigation }) => {
+  const { colors, isDark } = useTheme();
+
   const tabCount = state.routes.length || TAB_COUNT_DEFAULT;
   const tabWidth = TAB_BAR_WIDTH / tabCount;
 
@@ -79,53 +80,50 @@ const LiquidGlassTabBar: React.FC<BottomTabBarProps> = ({ state, descriptors, na
     ],
   }));
 
+  // Glass tint, borders, and icon colors all switch with the theme so the
+  // bar reads correctly in both light and dark mode instead of always
+  // rendering as a dark glass pill.
+  const blurTint = isDark ? 'systemUltraThinMaterialDark' : 'systemUltraThinMaterialLight';
+  const androidBlurTint = isDark ? 'dark' : 'light';
+  const barBackground = isDark ? 'rgba(20,20,22,0.35)' : 'rgba(255,255,255,0.55)';
+  const barTintOverlay = isDark ? 'rgba(10,10,12,0.25)' : 'rgba(255,255,255,0.35)';
+  const barInnerBorder = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.06)';
+  const shadowColor = isDark ? '#000' : colors.text;
+
+  const pillBackground = isDark ? colors.primary + '33' : colors.primary + '22';
+  const pillBorder = isDark ? colors.primary + '55' : colors.primary + '40';
+
+  const activeTint = colors.primary;
+  const inactiveTint = colors.textFaint;
+
   return (
     <View style={styles.wrapper} pointerEvents="box-none">
-      <View style={styles.glassContainer}>
+      <View style={[styles.glassContainer, { backgroundColor: barBackground, shadowColor }]}>
         <BlurView
           intensity={Platform.OS === 'ios' ? 55 : 90}
-          tint={Platform.OS === 'ios' ? 'systemUltraThinMaterialDark' : 'dark'}
+          tint={Platform.OS === 'ios' ? blurTint : androidBlurTint}
           style={StyleSheet.absoluteFill}
         />
 
-        <View style={styles.tintOverlay} pointerEvents="none" />
+        <View style={[styles.tintOverlay, { backgroundColor: barTintOverlay }]} pointerEvents="none" />
 
-        <LinearGradient
-          colors={['rgba(2, 2, 2, 0.07)', 'rgba(0, 0, 0, 0.05)', 'rgba(255,255,255,0.0)']}
-          start={{ x: 0.1, y: 0 }}
-          end={{ x: 0.9, y: 1 }}
-          style={StyleSheet.absoluteFill}
-          pointerEvents="none"
-        />
+        <View style={[styles.innerBorder, { borderColor: barInnerBorder }]} pointerEvents="none" />
 
-        <LinearGradient
-          colors={['rgba(255,255,255,0.0)', 'rgba(0, 0, 0, 0.12)']}
-          start={{ x: 0, y: 0.85 }}
-          end={{ x: 0, y: 1 }}
-          style={StyleSheet.absoluteFill}
-          pointerEvents="none"
-        />
-
-        <View style={styles.innerBorder} pointerEvents="none" />
-
-        <Animated.View style={[styles.activePill, { width: PILL_SIZE, height: PILL_SIZE }, pillAnimatedStyle]}>
-          <AnimatedBlurView
-            intensity={Platform.OS === 'ios' ? 35 : 60}
-            tint="light"
-            style={StyleSheet.absoluteFill}
-          />
-          <LinearGradient
-            colors={['rgba(88, 83, 83, 0.01)', 'rgba(27, 26, 26, 0.05)']}
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={styles.pillBorder} pointerEvents="none" />
+        <Animated.View
+          style={[
+            styles.activePill,
+            { width: PILL_SIZE, height: PILL_SIZE, backgroundColor: pillBackground },
+            pillAnimatedStyle,
+          ]}
+        >
+          <View style={[styles.pillBorder, { borderColor: pillBorder }]} pointerEvents="none" />
         </Animated.View>
 
         <View style={styles.tabsRow}>
           {state.routes.map((route, index) => {
             const isFocused = state.index === index;
             const icon = ICONS[route.name] ?? { active: 'ellipse', inactive: 'ellipse-outline' };
-            const tintColor = isFocused ? colors.primary : colors.textFaint;
+            const tintColor = isFocused ? activeTint : inactiveTint;
 
             const onPress = () => {
               const event = navigation.emit({
@@ -182,22 +180,18 @@ const styles = StyleSheet.create({
     borderRadius: 32,
     overflow: 'hidden',
     flexDirection: 'row',
-    backgroundColor: 'rgba(20,20,22,0.35)',
-    shadowColor: '#000',
     shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.18,
     shadowRadius: 20,
     elevation: 14,
   },
   tintOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(10,10,12,0.25)',
   },
   innerBorder: {
     ...StyleSheet.absoluteFillObject,
     borderRadius: 32,
     borderWidth: 1,
-    borderColor: 'rgba(0, 0, 0, 0.18)',
   },
   tabsRow: {
     flex: 1,
@@ -222,7 +216,6 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     borderRadius: 24,
     borderWidth: 1,
-    borderColor: 'rgba(0, 0, 0, 0.3)',
   },
 });
 

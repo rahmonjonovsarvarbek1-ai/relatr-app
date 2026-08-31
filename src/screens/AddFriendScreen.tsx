@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -10,7 +10,9 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useApp } from '../context/AppContext';
-import { colors, radius, spacing, typography, avatarPalette } from '../theme/theme';
+import { radius, spacing, typography, avatarPalette } from '../theme/theme';
+import type { ColorScheme } from '../theme/theme';
+import { useTheme } from '../context/ThemeContext';
 import Chip from '../components/Chip';
 import AvatarPicker from '../components/AvatarPicker';
 import { Ionicons } from '@expo/vector-icons';
@@ -35,6 +37,8 @@ const CATEGORIES: RelationshipCategory[] = [
 const EMOJIS = ['😊', '🌸', '🎸', '📚', '🏀', '✈️', '🎮', '🎨', '⚽', '🎬', '🐶', '☕', '🌿', '🔥', '💫', '🎧'];
 
 const AddFriendScreen: React.FC = () => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const { friends, addFriend, updateFriend, addImportantDate, updateImportantDate, deleteImportantDate } = useApp();
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
@@ -365,7 +369,7 @@ const AddFriendScreen: React.FC = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (colors: ColorScheme) => StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   topBar: {
     flexDirection: 'row',

@@ -17,16 +17,14 @@ const STORAGE_KEY = 'theme_mode';
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const systemScheme = useColorScheme();
-  const [mode, setModeState] = useState<ThemeMode>('dark');
+  const [mode, setModeState] = useState<ThemeMode>('system');
 
   useEffect(() => {
-    // Hozircha hamma narsa dark bo'lib tursin — light/dark
-    // tugmasi qo'shilganda qayta yoqiladi.
-    // AsyncStorage.getItem(STORAGE_KEY).then((saved) => {
-    //   if (saved === 'light' || saved === 'dark' || saved === 'system') {
-    //     setModeState(saved);
-    //   }
-    // });
+    AsyncStorage.getItem(STORAGE_KEY).then((saved) => {
+      if (saved === 'light' || saved === 'dark' || saved === 'system') {
+        setModeState(saved);
+      }
+    });
   }, []);
 
   const setMode = (newMode: ThemeMode) => {

@@ -27,7 +27,7 @@ import {
   type StoryTextSticker,
   type StoryMentionSticker,
   type StoryLocationSticker,
-} from './storyTypes';
+} from '../types/storyTypes';
 
 type Props = {
   uri: string;

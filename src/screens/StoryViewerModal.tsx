@@ -16,7 +16,7 @@ import { spacing, radius, typography } from '../theme/theme';
 import type { ColorScheme } from '../theme/theme';
 import Avatar from '../components/Avatar';
 import StoryMedia from './StoryMedia';
-import type { FriendStoryGroup, StoryRow, StoryMentionSticker } from './storyTypes';
+import type { FriendStoryGroup, StoryRow, StoryMentionSticker } from '../types/storyTypes';
 import { supabase } from '../utils/supabase';
 
 const IMAGE_DURATION_MS = 5000;

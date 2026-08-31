@@ -11,7 +11,7 @@ import { configureNotificationHandler, requestNotificationPermissionsAsync } fro
 
 const Gate: React.FC = () => {
   const { session, initializing } = useAuth();
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
 
   useEffect(() => {
     configureNotificationHandler();
@@ -29,19 +29,28 @@ const Gate: React.FC = () => {
   if (initializing) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
+        <StatusBar style={isDark ? 'light' : 'dark'} />
         <ActivityIndicator color={colors.text} />
       </View>
     );
   }
 
   if (!session) {
-    return <AuthScreen />;
+    return (
+      <>
+        <StatusBar style={isDark ? 'light' : 'dark'} />
+        <AuthScreen />
+      </>
+    );
   }
 
   return (
-    <AppProvider>
-      <RootNavigator />
-    </AppProvider>
+    <>
+      <StatusBar style={isDark ? 'light' : 'dark'} />
+      <AppProvider>
+        <RootNavigator />
+      </AppProvider>
+    </>
   );
 };
 
@@ -50,7 +59,6 @@ export default function App() {
     <ThemeProvider>
       <SafeAreaProvider>
         <AuthProvider>
-          <StatusBar style="light" />
           <Gate />
         </AuthProvider>
       </SafeAreaProvider>
