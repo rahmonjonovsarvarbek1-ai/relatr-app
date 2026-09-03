@@ -1,17 +1,116 @@
 // src/hooks/useProfileSettings.ts
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import { Alert } from 'react-native';
 import { supabase } from '../utils/supabase';
 import { useAuth } from '../context/AuthContext';
 import { cancelAllScheduledNotificationsAsync } from '../utils/notifications';
+import type { AppContact, FriendshipRow, ContactProfileRow } from '../types';
+
+export type UsernameCheckStatus = 'idle' | 'checking' | 'available' | 'taken' | 'invalid';
 
 export interface BlockedUserSummary {
   id: string;
   name: string;
   username: string;
   avatarUrl?: string;
+}
+
+// -----------------------------------------------------------------
+// Username mavjudligi va formatini tekshirish uchun hook
+// -----------------------------------------------------------------
+export function useUsernameCheck(currentUsername: string) {
+  const [usernameStatus, setUsernameStatus] = useState<UsernameCheckStatus>('idle');
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestIdRef = useRef(0);
+
+  const validateFormat = (value: string): boolean => {
+    // 3-20 belgi, lotin harf/raqam/._ bilan, harf bilan boshlanadi
+    const re = /^[a-z][a-z0-9._]{2,19}$/;
+    return re.test(value);
+  };
+
+  const checkUsername = useCallback(
+    (value: string) => {
+      const normalized = value.trim().toLowerCase();
+
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+
+      // O'zining joriy username'i bo'lsa — darhol "idle"
+      if (normalized === currentUsername.toLowerCase()) {
+        setUsernameStatus('idle');
+        return;
+      }
+
+      if (!normalized) {
+        setUsernameStatus('idle');
+        return;
+      }
+
+      if (!validateFormat(normalized)) {
+        setUsernameStatus('invalid');
+        return;
+      }
+
+      setUsernameStatus('checking');
+      const myRequestId = ++requestIdRef.current;
+
+      debounceRef.current = setTimeout(async () => {
+        try {
+          const { data, error } = await supabase.rpc('is_username_available', {
+            p_username: normalized,
+          });
+
+          // Race condition oldini olish
+          if (myRequestId !== requestIdRef.current) return;
+
+          if (error) {
+            console.error('Username check error:', error);
+            setUsernameStatus('idle');
+            return;
+          }
+
+          setUsernameStatus(data ? 'available' : 'taken');
+        } catch (e) {
+          if (myRequestId !== requestIdRef.current) return;
+          console.error('Username check exception:', e);
+          setUsernameStatus('idle');
+        }
+      }, 400); // 400ms debounce
+    },
+    [currentUsername]
+  );
+
+  const resetUsernameCheck = useCallback(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setUsernameStatus('idle');
+  }, []);
+
+  return { usernameStatus, checkUsername, resetUsernameCheck, validateFormat };
+}
+
+// -----------------------------------------------------------------
+// Maps a friendship row + the OTHER user's minimal profile into an
+// AppContact.
+// -----------------------------------------------------------------
+function toAppContact(
+  row: FriendshipRow,
+  otherProfile: ContactProfileRow,
+  meId: string
+): AppContact {
+  return {
+    id: row.id,
+    userId: otherProfile.id,
+    name: otherProfile.name,
+    username: otherProfile.username,
+    emoji: otherProfile.emoji ?? '🙂',
+    avatarColor: otherProfile.avatar_color ?? '#8B5FE0',
+    avatarUrl: otherProfile.avatar_url ?? undefined,
+    status: row.status,
+    isIncoming: row.status === 'pending' && row.friend_id === meId,
+    createdAt: row.created_at,
+  };
 }
 
 export function useProfileSettings() {
@@ -23,6 +122,119 @@ export function useProfileSettings() {
   const [mfaLoading, setMfaLoading] = useState(false);
   const [blockedUsers, setBlockedUsers] = useState<BlockedUserSummary[]>([]);
   const [blockedLoading, setBlockedLoading] = useState(false);
+
+  // ---------------------------------------------------------
+  // App Contacts (username-based, real Relatr users)
+  // ---------------------------------------------------------
+  const [contacts, setContacts] = useState<AppContact[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+
+  const instanceIdRef = useRef(Math.random().toString(36).slice(2));
+
+  const loadContacts = useCallback(async () => {
+    if (!userId) return;
+    setContactsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('friendships')
+        .select(
+          `id, requester_id, friend_id, status, created_at, updated_at,
+           requester:profiles!friendships_requester_id_fkey(id, name, username, emoji, avatar_color, avatar_url),
+           target:profiles!friendships_friend_id_fkey(id, name, username, emoji, avatar_color, avatar_url)`
+        )
+        .or(`requester_id.eq.${userId},friend_id.eq.${userId}`)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('loadContacts error:', error.message);
+        return;
+      }
+
+      const list: AppContact[] = (data ?? []).map((row: any) => {
+        const otherProfile: ContactProfileRow =
+          row.requester_id === userId ? row.target : row.requester;
+        return toAppContact(row as FriendshipRow, otherProfile, userId);
+      });
+
+      list.sort((a, b) => {
+        const rank = (c: AppContact) =>
+          c.status === 'pending' && c.isIncoming ? 0 : c.status === 'accepted' ? 1 : 2;
+        return rank(a) - rank(b);
+      });
+
+      setContacts(list);
+    } finally {
+      setContactsLoading(false);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) {
+      setContacts([]);
+      return;
+    }
+    loadContacts();
+
+    const channel = supabase
+      .channel(`friendships-${userId}-${instanceIdRef.current}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'friendships' },
+        () => loadContacts()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [userId, loadContacts]);
+
+  const acceptContactRequest = useCallback(
+    async (friendshipId: string) => {
+      const previous = contacts;
+      setContacts((prev) =>
+        prev.map((c) => (c.id === friendshipId ? { ...c, status: 'accepted', isIncoming: false } : c))
+      );
+      const { error } = await supabase
+        .from('friendships')
+        .update({ status: 'accepted' })
+        .eq('id', friendshipId);
+      if (error) {
+        console.error('acceptContactRequest error:', error.message);
+        setContacts(previous);
+        Alert.alert('Error', 'Could not accept this request.');
+      }
+    },
+    [contacts]
+  );
+
+  const declineContactRequest = useCallback(
+    async (friendshipId: string) => {
+      const previous = contacts;
+      setContacts((prev) => prev.filter((c) => c.id !== friendshipId));
+      const { error } = await supabase.from('friendships').delete().eq('id', friendshipId);
+      if (error) {
+        console.error('declineContactRequest error:', error.message);
+        setContacts(previous);
+        Alert.alert('Error', 'Could not decline this request.');
+      }
+    },
+    [contacts]
+  );
+
+  const removeContact = useCallback(
+    async (friendshipId: string) => {
+      const previous = contacts;
+      setContacts((prev) => prev.filter((c) => c.id !== friendshipId));
+      const { error } = await supabase.from('friendships').delete().eq('id', friendshipId);
+      if (error) {
+        console.error('removeContact error:', error.message);
+        setContacts(previous);
+        Alert.alert('Error', 'Could not remove this contact.');
+      }
+    },
+    [contacts]
+  );
 
   // ---------------------------------------------------------
   // MFA status
@@ -41,7 +253,7 @@ export function useProfileSettings() {
   }, [userId, refreshMfaStatus]);
 
   // ---------------------------------------------------------
-  // Profile photo (Web va Mobile uchun moslashtirilgan)
+  // Profile photo
   // ---------------------------------------------------------
   const pickAndUploadAvatar = useCallback(
     async (onDone: (publicUrl: string) => void) => {
@@ -54,7 +266,7 @@ export function useProfileSettings() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'], // Deprecated ogohlantirishini to'g'rilaydi
+        mediaTypes: ['images'],
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
@@ -66,7 +278,6 @@ export function useProfileSettings() {
       setUploadingPhoto(true);
 
       try {
-        // FileSystem o'rniga fetch() ishlatilmoqda — Web va Mobilda xatosiz ishlaydi
         const response = await fetch(asset.uri);
         const arrayBuffer = await response.arrayBuffer();
 
@@ -289,6 +500,13 @@ export function useProfileSettings() {
     blockedLoading,
     loadBlockedUsers,
     unblockUser,
+
+    contacts,
+    contactsLoading,
+    loadContacts,
+    acceptContactRequest,
+    declineContactRequest,
+    removeContact,
 
     requestContactsSync,
     requestCalendarSync,

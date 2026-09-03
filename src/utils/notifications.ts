@@ -1,22 +1,7 @@
 // src/utils/notifications.ts
 //
 // Local (on-device) scheduled notifications for friends' important dates
-// (birthdays, anniversaries, etc). This is the core of the app, so keep it
-// simple and predictable:
-//
-//   - Every ImportantDate gets up to two scheduled notifications:
-//       1. "on the day"      — fires every year on date.month/date.day
-//       2. "N days before"   — fires every year N days earlier (default 3)
-//   - Both use expo-notifications' native `yearly` trigger, so once
-//     scheduled they keep firing every year with no re-scheduling needed.
-//   - Identifiers are deterministic (`relatr-date-<dateId>-onday` /
-//     `-before`), so callers can cancel/replace a date's notifications
-//     without having to track any extra state.
-//
-// All functions are no-ops (and never throw) when running on web, in Expo
-// Go (which no longer supports expo-notifications remote/native features
-// as of SDK 53+), or in any environment where expo-notifications isn't
-// available. This file is always safe to import from cross-platform code.
+// (birthdays, anniversaries, etc).
 
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
@@ -26,17 +11,10 @@ const REMINDER_DAYS_BEFORE = 3;
 const NOTIFICATION_HOUR = 9; // 9:00 local time
 const NOTIFICATION_MINUTE = 0;
 
-// Expo Go (SDK 53+) no longer supports expo-notifications' native
-// functionality. Detect it so every function below can safely no-op
-// instead of throwing "[runtime not ready]: Exception in HostFunction".
+// Expo Go (SDK 53+) check
 const isExpoGo = Constants.appOwnership === 'expo';
 const isUnsupportedEnv = Platform.OS === 'web' || isExpoGo;
 
-// Lazily/safely load the native module. In Expo Go this import still
-// resolves (the JS package is installed), but calling into it throws —
-// so we additionally guard every call site with isUnsupportedEnv below.
-// Wrapping the import itself in a try/catch protects against edge cases
-// where even requiring the native module throws synchronously.
 let Notifications: typeof import('expo-notifications') | null = null;
 if (!isUnsupportedEnv) {
   try {
@@ -110,23 +88,18 @@ function beforeIdentifier(dateId: string) {
   return `relatr-date-${dateId}-before`;
 }
 
-/** Shifts a month/day pair back by `days`, correctly rolling over year/month
- * boundaries (Dec 31 - 3 days -> Dec 28, Jan 1 - 3 days -> Dec 29, etc). We
- * anchor to a fixed leap year so Feb 29 birthdays don't throw off the math. */
+/** Shifts a month/day pair back by `days`, returning 1-indexed month (1-12) for expo-notifications. */
 function shiftMonthDay(month0: number, day: number, daysBack: number) {
   const anchor = new Date(2024, month0, day, 12, 0, 0);
   anchor.setDate(anchor.getDate() - daysBack);
-  return { month0: anchor.getMonth(), day: anchor.getDate() };
+  return { month: anchor.getMonth() + 1, day: anchor.getDate() };
 }
 
 function dateLabel(date: ImportantDate): string {
   return date.label?.trim() || date.type;
 }
 
-/** Schedules (or re-schedules) the "on the day" and "N days before"
- * notifications for a single important date. Any previously-scheduled
- * notifications for this date are cancelled first, so this is safe to call
- * repeatedly (e.g. after every edit). */
+/** Schedules (or re-schedules) the "on the day" and "N days before" notifications for an important date. */
 export async function scheduleImportantDateNotifications(
   friend: Pick<Friend, 'id' | 'name'>,
   date: ImportantDate
@@ -140,9 +113,13 @@ export async function scheduleImportantDateNotifications(
 
     const d = new Date(date.date);
     if (Number.isNaN(d.getTime())) return;
+
     const month0 = d.getMonth();
     const day = d.getDate();
     const label = dateLabel(date);
+
+    // 1-indexed month for Expo Notifications (January = 1)
+    const expoMonth = month0 + 1;
 
     await Notifications.scheduleNotificationAsync({
       identifier: onDayIdentifier(date.id),
@@ -153,7 +130,7 @@ export async function scheduleImportantDateNotifications(
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.YEARLY,
-        month: month0,
+        month: expoMonth,
         day,
         hour: NOTIFICATION_HOUR,
         minute: NOTIFICATION_MINUTE,
@@ -170,7 +147,7 @@ export async function scheduleImportantDateNotifications(
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.YEARLY,
-        month: before.month0,
+        month: before.month,
         day: before.day,
         hour: NOTIFICATION_HOUR,
         minute: NOTIFICATION_MINUTE,
@@ -202,8 +179,7 @@ export async function scheduleAllForFriend(friend: Friend): Promise<void> {
   }
 }
 
-/** Cancels notifications for every important date belonging to a friend
- * (used when the friend itself is deleted). */
+/** Cancels notifications for every important date belonging to a friend. */
 export async function cancelAllForFriend(friend: Pick<Friend, 'importantDates'>): Promise<void> {
   if (isUnsupportedEnv || !Notifications) return;
   for (const date of friend.importantDates) {
@@ -211,7 +187,7 @@ export async function cancelAllForFriend(friend: Pick<Friend, 'importantDates'>)
   }
 }
 
-/** Cancels every scheduled Relatr notification (used when push is turned off). */
+/** Cancels every scheduled Relatr notification. */
 export async function cancelAllScheduledNotificationsAsync(): Promise<void> {
   if (isUnsupportedEnv || !Notifications) return;
   try {
@@ -221,14 +197,13 @@ export async function cancelAllScheduledNotificationsAsync(): Promise<void> {
   }
 }
 
-/** Full resync: cancels everything, then re-schedules every friend's
- * important dates. Used on app start and when push notifications are
- * toggled back on. Archived friends are skipped. */
+/** Full resync: cancels everything, then re-schedules every active friend's important dates. */
 export async function rescheduleAllNotifications(friends: Friend[]): Promise<void> {
   if (isUnsupportedEnv || !Notifications) return;
   try {
     await cancelAllScheduledNotificationsAsync();
     if (!(await hasNotificationPermissionAsync())) return;
+
     for (const friend of friends) {
       if (friend.isArchived) continue;
       await scheduleAllForFriend(friend);

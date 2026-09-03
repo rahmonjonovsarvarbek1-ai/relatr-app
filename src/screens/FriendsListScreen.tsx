@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
   TextInput,
   Image,
 } from 'react-native';
@@ -19,6 +18,7 @@ import { useNavigation } from '@react-navigation/native';
 import { daysSince, formatTimeAgo, daysUntilNextOccurrence } from '../utils/dateUtils';
 import { Ionicons } from '@expo/vector-icons';
 import { RelationshipCategory } from '../types';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const CATEGORIES: (RelationshipCategory | 'All')[] = [
   'All',

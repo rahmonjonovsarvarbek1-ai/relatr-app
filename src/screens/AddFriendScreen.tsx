@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
   TextInput,
   ActivityIndicator,
 } from 'react-native';
@@ -21,6 +20,7 @@ import { RelationshipCategory, ImportantDate } from '../types';
 import DateFields from '../components/DateFields';
 import { newId } from '../utils/id';
 import { daysUntilNextOccurrence, formatRelativeDay, getAgeTurning } from '../utils/dateUtils';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const CATEGORIES: RelationshipCategory[] = [
   'Best Friend',

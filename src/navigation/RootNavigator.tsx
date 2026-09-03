@@ -8,13 +8,13 @@ import LiquidGlassTabBar from '../components/LiquidGlassTabBar';
 import DatesScreen from '../screens/DatesScreen';
 import FriendsListScreen from '../screens/FriendsListScreen';
 import FriendProfileScreen from '../screens/FriendProfileScreen';
+import ContactProfileScreen from '../screens/ContactProfileScreen'; // <-- 1. Import qilindi
 import AddFriendScreen from '../screens/AddFriendScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import StoriesScreen from '../screens/StoriesScreen';
 
-
 const Tab = createBottomTabNavigator();
-const RootStack = createNativeStackNavigator(); // <-- 1. Yangi RootStack yaratildi
+const RootStack = createNativeStackNavigator();
 
 const MainTabs = () => (
   <Tab.Navigator
@@ -49,12 +49,16 @@ const RootNavigator: React.FC = () => {
         {/* Pastki tab menyu */}
         <RootStack.Screen name="MainTabs" component={MainTabs} />
 
-        {/* 2. FriendProfile va AddFriend ham shu yerga qo'shildi! 
-            Endi istalgan sahifadan do'st profiliga o'tib bo'ladi */}
+        {/* Ekranlar */}
         <RootStack.Screen
           name="FriendProfile"
           component={FriendProfileScreen}
           options={{ presentation: 'card' }}
+        />
+        <RootStack.Screen
+          name="ContactProfile"
+          component={ContactProfileScreen}
+          options={{ presentation: 'card' }} // <-- 2. RootStack ga qo'shildi!
         />
         <RootStack.Screen
           name="AddFriend"

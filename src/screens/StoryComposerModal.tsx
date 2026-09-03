@@ -227,7 +227,25 @@ const StoryComposerModal: React.FC<Props> = ({
           style={StyleSheet.absoluteFillObject}
           onPress={() => setSelectedId(null)}
         >
-          <StoryMedia uri={uri} mediaType={mediaType} width={screenW} height={screenH} loop />
+          {/*
+  ONLY the changed usage inside StoryComposerModal.tsx — replace the
+  existing <StoryMedia .../> call with this. Everything else in that
+  file stays the same.
+*/}
+
+<StoryMedia
+  uri={uri}
+  mediaType={mediaType}
+  width={screenW}
+  height={screenH}
+  loop
+  zoomEnabled
+  onAspectRatioChange={(ratio) => {
+    // Optional: surface this upward if the parent screen wants to know
+    // whether the picked media is vertical / square / landscape before
+    // upload (e.g. to warn the user or auto-crop server-side later).
+  }}
+/>
         </TouchableOpacity>
 
         <LinearGradient

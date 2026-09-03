@@ -50,6 +50,7 @@ export type StoryRow = {
 };
 
 export type FriendStoryGroup = {
+  avatarUrl: any;
   friendId: string;
   friendName: string;
   emoji: string;
@@ -77,6 +78,7 @@ export type NotificationRow = {
 };
 
 export type SearchUser = {
+  avatarUrl: string | undefined;
   id: string;
   name: string;
   username: string;

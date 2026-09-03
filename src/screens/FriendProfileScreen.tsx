@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
   Alert,
   TextInput,
   Modal,
@@ -32,6 +31,7 @@ import {
 import { Note, ImportantDate, ImportantDateType, Gender, SocialLink } from '../types';
 import DateFields from '../components/DateFields';
 import { newId } from '../utils/id';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const GIFT_IDEAS: Record<string, string[]> = {
   Photography: ['A roll of film', 'Photo album / scrapbook', 'Camera strap'],

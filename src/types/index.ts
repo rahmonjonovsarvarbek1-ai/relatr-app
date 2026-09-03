@@ -125,6 +125,34 @@ export interface WorldSpecialDay {
 }
 
 // =====================================================================
+// APP CONTACTS (username-based, real-user relationships)
+// -----------------------------------------------------------------
+// These are DIFFERENT from `Friend`. A `Friend` is a private diary
+// entry the user writes about someone (birthday, interests, notes —
+// that person doesn't need a Relatr account at all). An `AppContact`
+// is another REAL Relatr user, connected through the `friendships`
+// table by their unique `username` (same table StoriesScreen's
+// SearchModal already reads/writes for friend requests). Contacts
+// gate who can see your Stories; Friends are your private notes
+// about people, who may or may not be Contacts too.
+// =====================================================================
+
+export type FriendshipStatus = 'pending' | 'accepted';
+
+export interface AppContact {
+  id: string;               // friendships row id
+  userId: string;            // the OTHER user's profile id
+  name: string;
+  username: string;
+  emoji: string;
+  avatarColor: string;
+  avatarUrl?: string;
+  status: FriendshipStatus;
+  isIncoming: boolean;       // true if THEY requested (I must accept/decline)
+  createdAt: string;
+}
+
+// =====================================================================
 // Supabase row shapes (snake_case, as stored in Postgres).
 // Mapping to/from the camelCase app types above happens in
 // src/utils/mappers.ts.
@@ -249,3 +277,25 @@ export interface WorldHolidayRow {
   created_at: string;
 }
 
+// ---------------- NEW: App Contacts ----------------
+export interface FriendshipRow {
+  id: string;
+  requester_id: string;
+  friend_id: string;
+  status: FriendshipStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+// Minimal profile projection joined alongside a friendship row when
+// fetching contacts (id/name/username/emoji/avatar only — no bio,
+// settings, etc. Contacts never need the full ProfileRow).
+export interface ContactProfileRow {
+  id: string;
+  name: string;
+  username: string;
+  emoji: string;
+  avatar_color: string;
+  avatar_url: string | null;
+}
+// --------------------------------------

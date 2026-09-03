@@ -179,14 +179,16 @@ const StoryViewerModal: React.FC<Props> = ({
             own tap-zone navigation below rather than replacing it. */}
         <TouchableWithoutFeedback onPressIn={pauseTimer} onPressOut={resumeTimer}>
           <View style={StyleSheet.absoluteFillObject}>
-            <StoryMedia
-              uri={current.media_url}
-              mediaType={current.media_type}
-              width={screenW}
-              height={screenH}
-              onEnd={current.media_type === 'video' ? goNext : undefined}
-              paused={paused}
-            />
+           <StoryMedia
+  uri={current.media_url}
+  mediaType={current.media_type}
+  width={screenW}
+  height={screenH}
+  onEnd={current.media_type === 'video' ? goNext : undefined}
+  paused={paused}
+  zoomEnabled
+/>
+
           </View>
         </TouchableWithoutFeedback>
 

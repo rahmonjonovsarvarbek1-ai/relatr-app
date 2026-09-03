@@ -1,11 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
   TextInput,
   Modal,
   Switch,
@@ -29,16 +28,24 @@ import DateFields from '../components/DateFields';
 import { useAuth } from '../context/AuthContext';
 import { useProfileSettings } from '../hooks/useProfileSettings';
 import { requestNotificationPermissionsAsync } from '../utils/notifications';
+import type { AppContact } from '../types';
+// To'g'risi:
+import { supabase } from '../utils/supabase';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 type BlockedUserSummary = { id: string; name: string; username: string };
 
 const EMOJIS = ['🌿', '😊', '🌸', '🎸', '📚', '🏀', '✈️', '🎮', '🎨', '☕', '🔥', '💫'];
 
 type SettingsPage = 'main' | 'notifications' | 'calendar' | 'privacy' | 'about' | 'blocked' | '2fa' | 'password';
-type StatKind = 'friends' | 'favorites' | 'categories' | null;
+type StatKind = 'friends' | 'favorites' | 'contacts' | null;
+type UsernameCheckStatus = 'idle' | 'checking' | 'available' | 'taken' | 'invalid';
 
 const TERMS_URL = 'https://mongom.app/terms'; // haqiqiy URL bilan almashtiring
 const PRIVACY_URL = 'https://mongom.app/privacy'; // haqiqiy URL bilan almashtiring
+
+const USERNAME_REGEX = /^[a-z][a-z0-9._]{2,19}$/;
+const USERNAME_DEBOUNCE_MS = 400;
 
 const ProfileScreen: React.FC = () => {
   const { colors } = useTheme();
@@ -63,11 +70,20 @@ const ProfileScreen: React.FC = () => {
   const [hasBirthday, setHasBirthday] = useState(!!profile.birthday);
   const [birthdayISO, setBirthdayISO] = useState(profile.birthday ?? new Date().toISOString());
 
+  // ---- Username availability check state ----
+  const [usernameStatus, setUsernameStatus] = useState<UsernameCheckStatus>('idle');
+  const usernameDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const usernameRequestIdRef = useRef(0);
+
+  // ---- Save state (loading / error for the whole edit form) ----
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   // ---- Settings modal state ----
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('main');
 
-  // ---- Stats detail modal state (Friends / Favorites / Categories) ----
+  // ---- Stats detail modal state (Friends / Favorites / Contacts) ----
   const [statModal, setStatModal] = useState<StatKind>(null);
 
   // ---- 2FA enrollment sub-state ----
@@ -83,6 +99,71 @@ const ProfileScreen: React.FC = () => {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSaving, setPasswordSaving] = useState(false);
 
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (usernameDebounceRef.current) clearTimeout(usernameDebounceRef.current);
+    };
+  }, []);
+
+  // ---- Username availability check ----
+  const checkUsernameAvailability = useCallback(
+    (value: string) => {
+      const normalized = value.trim().toLowerCase();
+
+      if (usernameDebounceRef.current) clearTimeout(usernameDebounceRef.current);
+
+      // O'zining joriy username'i bo'lsa — tekshirish shart emas
+      if (normalized === profile.username.toLowerCase()) {
+        setUsernameStatus('idle');
+        return;
+      }
+
+      if (!normalized) {
+        setUsernameStatus('idle');
+        return;
+      }
+
+      if (!USERNAME_REGEX.test(normalized)) {
+        setUsernameStatus('invalid');
+        return;
+      }
+
+      setUsernameStatus('checking');
+      const myRequestId = ++usernameRequestIdRef.current;
+
+      usernameDebounceRef.current = setTimeout(async () => {
+        try {
+          const { data, error } = await supabase.rpc('is_username_available', {
+            p_username: normalized,
+          });
+
+          // Eski so'rov natijasi kelib qolsa e'tiborsiz qoldiramiz
+          if (myRequestId !== usernameRequestIdRef.current) return;
+
+          if (error) {
+            console.error('Username check error:', error);
+            setUsernameStatus('idle');
+            return;
+          }
+
+          setUsernameStatus(data ? 'available' : 'taken');
+        } catch (e) {
+          if (myRequestId !== usernameRequestIdRef.current) return;
+          console.error('Username check exception:', e);
+          setUsernameStatus('idle');
+        }
+      }, USERNAME_DEBOUNCE_MS);
+    },
+    [profile.username]
+  );
+
+  const resetUsernameCheck = () => {
+    if (usernameDebounceRef.current) clearTimeout(usernameDebounceRef.current);
+    usernameRequestIdRef.current += 1;
+    setUsernameStatus('idle');
+  };
+
   const openEdit = () => {
     setName(profile.name);
     setUsername(profile.username);
@@ -95,23 +176,96 @@ const ProfileScreen: React.FC = () => {
     setInterestsText(profile.interests.join(', '));
     setHasBirthday(!!profile.birthday);
     setBirthdayISO(profile.birthday ?? new Date().toISOString());
+    resetUsernameCheck();
+    setSaveError(null);
     setEditing(true);
   };
 
-  const saveEdit = () => {
-    updateProfile({
-      name: name.trim() || profile.name,
-      username: username.trim() || profile.username,
-      bio: bio.trim(),
-      emoji,
-      avatarColor: color,
-      city: city.trim() || undefined,
-      school: school.trim() || undefined,
-      instagram: instagram.trim() || undefined,
-      interests: interestsText.split(',').map((s: string) => s.trim()).filter(Boolean),
-      birthday: hasBirthday ? birthdayISO : undefined,
-    });
+  const closeEdit = () => {
+    resetUsernameCheck();
+    setSaveError(null);
     setEditing(false);
+  };
+
+  const isUsernameBlocking =
+    usernameStatus === 'taken' || usernameStatus === 'checking' || usernameStatus === 'invalid';
+
+  const saveEdit = async () => {
+    setSaveError(null);
+
+    const trimmedName = name.trim();
+    const trimmedUsername = username.trim().toLowerCase();
+
+    if (!trimmedName) {
+      setSaveError('Name cannot be empty.');
+      return;
+    }
+
+    if (!trimmedUsername) {
+      setSaveError('Username cannot be empty.');
+      return;
+    }
+
+    // Username o'zgargan bo'lsa — status'ni tekshiramiz
+    if (trimmedUsername !== profile.username.toLowerCase()) {
+      if (usernameStatus === 'taken') {
+        setSaveError('This username is already taken.');
+        return;
+      }
+      if (usernameStatus === 'invalid') {
+        setSaveError(
+          'Username must be 3–20 characters, start with a letter, and contain only letters, numbers, "." or "_".'
+        );
+        return;
+      }
+      if (usernameStatus === 'checking') {
+        setSaveError('Still checking username availability, please wait...');
+        return;
+      }
+      if (usernameStatus === 'idle') {
+        // Foydalanuvchi tekshiruv tugashini kutmasdan bosgan bo'lishi mumkin
+        setSaveError('Please wait for the username check to complete.');
+        checkUsernameAvailability(trimmedUsername);
+        return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      const result: any = await updateProfile({
+        name: trimmedName,
+        username: trimmedUsername,
+        bio: bio.trim(),
+        emoji,
+        avatarColor: color,
+        city: city.trim() || undefined,
+        school: school.trim() || undefined,
+        instagram: instagram.trim() || undefined,
+        interests: interestsText.split(',').map((s: string) => s.trim()).filter(Boolean),
+        birthday: hasBirthday ? birthdayISO : undefined,
+      });
+
+      // updateProfile ba'zi loyihalarda { error } qaytaradi, ba'zilarida hech narsa
+      // qaytarmasligi mumkin — ikkalasini ham qo'llab-quvvatlaymiz.
+      const error = result?.error;
+      if (error) {
+        const message =
+          typeof error === 'string'
+            ? error
+            : error?.message?.includes('duplicate') || error?.code === '23505'
+            ? 'This username was just taken. Please choose another.'
+            : error?.message || 'Could not save changes. Please try again.';
+        setSaveError(message);
+        setSaving(false);
+        return;
+      }
+
+      setSaving(false);
+      setEditing(false);
+    } catch (e: any) {
+      setSaving(false);
+      setSaveError(e?.message || 'Something went wrong while saving.');
+    }
   };
 
   const openSettings = () => {
@@ -294,6 +448,11 @@ const ProfileScreen: React.FC = () => {
   // ---- Password handlers ----
   const submitPasswordChange = async () => {
     setPasswordError(null);
+
+    if (newPassword.length < 8) {
+      setPasswordError('Password must be at least 8 characters.');
+      return;
+    }
     if (newPassword !== confirmPassword) {
       setPasswordError('Passwords do not match.');
       return;
@@ -314,19 +473,25 @@ const ProfileScreen: React.FC = () => {
   const stats = {
     total: friends.length,
     favorites: friends.filter((f) => f.favorite).length,
-    categories: new Set(friends.map((f) => f.category)).size,
+    contacts: settings.contacts.filter((c) => c.status === 'accepted').length,
   };
 
-  const metaLine = [profile.city, profile.school].filter(Boolean).join(' · ');
+  const pendingIncomingCount = settings.contacts.filter(
+    (c) => c.status === 'pending' && c.isIncoming
+  ).length;
 
-  // ---- Stat modal data resolution ----
-  const categoryList = Array.from(new Set(friends.map((f) => f.category))).filter(Boolean) as string[];
+  const metaLine = [profile.city, profile.school].filter(Boolean).join(' · ');
 
   const getStatModalTitle = () => {
     if (statModal === 'friends') return `Friends (${stats.total})`;
     if (statModal === 'favorites') return `Favorites (${stats.favorites})`;
-    if (statModal === 'categories') return `Categories (${stats.categories})`;
+    if (statModal === 'contacts') return `Contacts (${stats.contacts})`;
     return '';
+  };
+
+  const openStatModal = (kind: StatKind) => {
+    if (kind === 'contacts') settings.loadContacts();
+    setStatModal(kind);
   };
 
   // Navigate to a friend's FriendProfileScreen (same route name used by the
@@ -336,30 +501,56 @@ const ProfileScreen: React.FC = () => {
     navigation.navigate('FriendProfile', { friendId });
   };
 
+  // ---------------------------------------------------------------------
+  // Navigate to ContactProfileScreen for a given contact.
+  // ContactProfileScreen expects `userId` = the OTHER PERSON's profile id
+  // (see its ContactProfileParams type). We pass along whatever we
+  // already know (name/username/emoji/avatar) so the target screen can
+  // render instantly without a network round trip, while it still
+  // re-resolves the real friendship state itself.
+  //
+  // IMPORTANT: `contact.id` here must be the other user's profile id
+  // (AppContact.id), NOT the friendships row id. If your useProfileSettings
+  // hook keys AppContact by the friendship row instead, expose the
+  // underlying profile id as e.g. `contact.userId` and use that below.
+  // ---------------------------------------------------------------------
+  const openContactProfile = (contact: AppContact) => {
+    setStatModal(null);
+    navigation.navigate('ContactProfile', {
+      userId: contact.id,
+      name: contact.name,
+      username: contact.username,
+      emoji: contact.emoji,
+      avatarColor: contact.avatarColor,
+      avatarUrl: contact.avatarUrl,
+    });
+  };
+
   const renderStatModalContent = () => {
-    if (statModal === 'categories') {
+    if (statModal === 'contacts') {
       return (
         <FlatList
-          data={categoryList}
-          keyExtractor={(item) => item}
+          data={settings.contacts}
+          keyExtractor={(item) => item.id}
           contentContainerStyle={styles.statListContent}
           showsVerticalScrollIndicator={false}
+          refreshing={settings.contactsLoading}
+          onRefresh={settings.loadContacts}
           ListEmptyComponent={
             <View style={styles.statEmptyWrap}>
-              <Text style={styles.statEmptyText}>No categories yet.</Text>
+              <Text style={styles.statEmptyText}>
+                {settings.contactsLoading ? 'Loading...' : 'No contacts yet. Find people by username in Stories.'}
+              </Text>
             </View>
           }
-          renderItem={({ item }) => {
-            const count = friends.filter((f) => f.category === item).length;
-            return (
-              <View style={styles.statRow}>
-                <View style={styles.categoryDot} />
-                <Text style={styles.statRowText}>{item}</Text>
-                <View style={{ flex: 1 }} />
-                <Text style={styles.statRowCount}>{count}</Text>
-              </View>
-            );
-          }}
+          renderItem={({ item }) => (
+            <ContactRow
+              contact={item}
+              colors={colors}
+              settings={settings}
+              onPress={openContactProfile}
+            />
+          )}
         />
       );
     }
@@ -447,7 +638,7 @@ const ProfileScreen: React.FC = () => {
           <TouchableOpacity
             style={styles.statBlock}
             activeOpacity={0.65}
-            onPress={() => setStatModal('friends')}
+            onPress={() => openStatModal('friends')}
           >
             <StatBlockInner value={stats.total} label="Friends" colors={colors} />
           </TouchableOpacity>
@@ -455,7 +646,7 @@ const ProfileScreen: React.FC = () => {
           <TouchableOpacity
             style={styles.statBlock}
             activeOpacity={0.65}
-            onPress={() => setStatModal('favorites')}
+            onPress={() => openStatModal('favorites')}
           >
             <StatBlockInner value={stats.favorites} label="Favorites" colors={colors} />
           </TouchableOpacity>
@@ -463,9 +654,14 @@ const ProfileScreen: React.FC = () => {
           <TouchableOpacity
             style={styles.statBlock}
             activeOpacity={0.65}
-            onPress={() => setStatModal('categories')}
+            onPress={() => openStatModal('contacts')}
           >
-            <StatBlockInner value={stats.categories} label="Categories" colors={colors} />
+            <StatBlockInner
+              value={stats.contacts}
+              label="Contacts"
+              colors={colors}
+              badge={pendingIncomingCount > 0 ? pendingIncomingCount : undefined}
+            />
           </TouchableOpacity>
         </View>
 
@@ -506,7 +702,7 @@ const ProfileScreen: React.FC = () => {
         <View style={{ height: spacing.xxl }} />
       </ScrollView>
 
-      {/* STAT DETAIL FULL-SCREEN MODAL (Friends / Favorites / Categories) */}
+      {/* STAT DETAIL FULL-SCREEN MODAL (Friends / Favorites / Contacts) */}
       <Modal
         visible={statModal !== null}
         animationType="slide"
@@ -532,14 +728,31 @@ const ProfileScreen: React.FC = () => {
           <View style={styles.modalCard}>
             <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
               <View style={styles.modalTopRow}>
-                <TouchableOpacity onPress={() => setEditing(false)}>
+                <TouchableOpacity onPress={closeEdit} disabled={saving}>
                   <Text style={styles.cancelText}>Cancel</Text>
                 </TouchableOpacity>
                 <Text style={styles.modalTitle}>Edit profile</Text>
-                <TouchableOpacity onPress={saveEdit}>
-                  <Text style={styles.doneText}>Done</Text>
+                <TouchableOpacity onPress={saveEdit} disabled={isUsernameBlocking || saving}>
+                  {saving ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : (
+                    <Text
+                      style={[
+                        styles.doneText,
+                        isUsernameBlocking && { opacity: 0.4 },
+                      ]}
+                    >
+                      Done
+                    </Text>
+                  )}
                 </TouchableOpacity>
               </View>
+
+              {!!saveError && (
+                <Text style={[styles.errorText, { textAlign: 'center', marginTop: spacing.sm }]}>
+                  {saveError}
+                </Text>
+              )}
 
               <View style={{ alignItems: 'center', marginVertical: spacing.lg }}>
                 <TouchableOpacity onPress={handlePickAvatar} disabled={settings.uploadingPhoto}>
@@ -586,7 +799,70 @@ const ProfileScreen: React.FC = () => {
               <TextInput style={styles.input} value={name} onChangeText={setName} placeholderTextColor={colors.textFaint} />
 
               <Text style={styles.label}>Username</Text>
-              <TextInput style={styles.input} value={username} onChangeText={setUsername} placeholderTextColor={colors.textFaint} autoCapitalize="none" />
+              <View style={{ position: 'relative' }}>
+                <TextInput
+                  style={[
+                    styles.input,
+                    usernameStatus === 'taken' && styles.inputError,
+                    usernameStatus === 'invalid' && styles.inputError,
+                    usernameStatus === 'available' && styles.inputSuccess,
+                  ]}
+                  value={username}
+                  onChangeText={(v) => {
+                    const cleaned = v.replace(/[^a-z0-9_.]/gi, '').toLowerCase();
+                    setUsername(cleaned);
+                    checkUsernameAvailability(cleaned);
+                  }}
+                  placeholderTextColor={colors.textFaint}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder="unique_username"
+                  maxLength={20}
+                />
+                {usernameStatus === 'checking' && (
+                  <ActivityIndicator
+                    size="small"
+                    color={colors.textFaint}
+                    style={styles.usernameStatusIcon}
+                  />
+                )}
+                {usernameStatus === 'available' && (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={20}
+                    color="#34C759"
+                    style={styles.usernameStatusIcon}
+                  />
+                )}
+                {(usernameStatus === 'taken' || usernameStatus === 'invalid') && (
+                  <Ionicons
+                    name="close-circle"
+                    size={20}
+                    color="#FF3B30"
+                    style={styles.usernameStatusIcon}
+                  />
+                )}
+              </View>
+
+              {usernameStatus === 'checking' && (
+                <Text style={styles.helperText}>Checking availability...</Text>
+              )}
+              {usernameStatus === 'available' && (
+                <Text style={[styles.helperText, { color: '#34C759' }]}>✓ Username available</Text>
+              )}
+              {usernameStatus === 'taken' && (
+                <Text style={styles.errorText}>This username is already taken.</Text>
+              )}
+              {usernameStatus === 'invalid' && (
+                <Text style={styles.errorText}>
+                  3–20 characters, must start with a letter, only letters/numbers/./_ allowed.
+                </Text>
+              )}
+              {usernameStatus === 'idle' && (
+                <Text style={styles.helperText}>
+                  Others find you by this username in Stories search. Must be unique — letters, numbers, "." and "_" only.
+                </Text>
+              )}
 
               <Text style={styles.label}>Bio</Text>
               <TextInput style={[styles.input, { minHeight: 70, textAlignVertical: 'top' }]} value={bio} onChangeText={setBio} multiline placeholderTextColor={colors.textFaint} />
@@ -616,8 +892,16 @@ const ProfileScreen: React.FC = () => {
               <Text style={styles.label}>Interests (comma separated)</Text>
               <TextInput style={styles.input} value={interestsText} onChangeText={setInterestsText} placeholderTextColor={colors.textFaint} />
 
-              <TouchableOpacity style={styles.saveBtn} onPress={saveEdit}>
-                <Text style={styles.saveBtnText}>Save Changes</Text>
+              <TouchableOpacity
+                style={[styles.saveBtn, (isUsernameBlocking || saving) && { opacity: 0.6 }]}
+                onPress={saveEdit}
+                disabled={isUsernameBlocking || saving}
+              >
+                {saving ? (
+                  <ActivityIndicator color={colors.bg} />
+                ) : (
+                  <Text style={styles.saveBtnText}>Save Changes</Text>
+                )}
               </TouchableOpacity>
               <View style={{ height: spacing.lg }} />
             </ScrollView>
@@ -927,13 +1211,104 @@ const ToggleRow: React.FC<{
   );
 };
 
-const StatBlockInner: React.FC<{ value: number; label: string; colors: ColorScheme }> = ({ value, label, colors }) => {
+const StatBlockInner: React.FC<{ value: number; label: string; colors: ColorScheme; badge?: number }> = ({
+  value,
+  label,
+  colors,
+  badge,
+}) => {
   const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
     <View style={styles.statBlockInner}>
-      <Text style={styles.statValue}>{value}</Text>
+      <View>
+        <Text style={styles.statValue}>{value}</Text>
+        {!!badge && (
+          <View style={styles.statBadge}>
+            <Text style={styles.statBadgeText}>{badge > 9 ? '9+' : badge}</Text>
+          </View>
+        )}
+      </View>
       <Text style={styles.statLabel}>{label}</Text>
     </View>
+  );
+};
+
+// ---------------------------------------------------------------------
+// Contact row — shows an accepted contact plainly, or a pending incoming
+// request with Accept/Decline actions inline (per product decision: one
+// list, not a separate requests tab).
+//
+// The whole row is now tappable and opens ContactProfileScreen via the
+// `onPress` prop. The inline Accept/Decline/Remove controls stop event
+// propagation so tapping them does not also trigger navigation.
+// ---------------------------------------------------------------------
+const ContactRow: React.FC<{
+  contact: AppContact;
+  colors: ColorScheme;
+  settings: ReturnType<typeof useProfileSettings>;
+  onPress: (contact: AppContact) => void;
+}> = ({ contact, colors, settings, onPress }) => {
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const isPendingIncoming = contact.status === 'pending' && contact.isIncoming;
+  const isPendingOutgoing = contact.status === 'pending' && !contact.isIncoming;
+
+  return (
+    <TouchableOpacity
+      style={styles.statRow}
+      activeOpacity={0.6}
+      onPress={() => onPress(contact)}
+    >
+      {contact.avatarUrl ? (
+        <Image source={{ uri: contact.avatarUrl }} style={styles.statRowPhoto} />
+      ) : (
+        <Avatar emoji={contact.emoji} color={contact.avatarColor} size={40} />
+      )}
+      <View style={{ marginLeft: spacing.sm, flex: 1 }}>
+        <Text style={styles.statRowText}>{contact.name}</Text>
+        <Text style={styles.statRowSub}>
+          @{contact.username}
+          {isPendingOutgoing ? ' · Requested' : ''}
+        </Text>
+      </View>
+
+      {isPendingIncoming ? (
+        <View style={{ flexDirection: 'row', gap: spacing.xs }}>
+          <TouchableOpacity
+            style={styles.contactAcceptBtn}
+            onPress={(e) => {
+              e.stopPropagation();
+              settings.acceptContactRequest(contact.id);
+            }}
+          >
+            <Text style={styles.contactAcceptBtnText}>Accept</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.contactDeclineBtn}
+            onPress={(e) => {
+              e.stopPropagation();
+              settings.declineContactRequest(contact.id);
+            }}
+          >
+            <Ionicons name="close" size={16} color={colors.textFaint} />
+          </TouchableOpacity>
+        </View>
+      ) : isPendingOutgoing ? (
+        <Ionicons name="time-outline" size={16} color={colors.textFaint} />
+      ) : (
+        <TouchableOpacity
+          onPress={(e) => {
+            e.stopPropagation();
+            Alert.alert('Remove contact', `Remove @${contact.username} from your contacts?`, [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Remove', style: 'destructive', onPress: () => settings.removeContact(contact.id) },
+            ]);
+          }}
+          hitSlop={8}
+        >
+          <Ionicons name="ellipsis-horizontal" size={16} color={colors.textFaint} />
+        </TouchableOpacity>
+      )}
+    </TouchableOpacity>
   );
 };
 
@@ -993,6 +1368,19 @@ const makeStyles = (colors: ColorScheme) =>
     statValue: { ...typography.h3, color: colors.text, fontWeight: '700' },
     statLabel: { ...typography.caption, color: colors.textFaint, marginTop: 2 },
     statDivider: { width: StyleSheet.hairlineWidth, height: '70%', backgroundColor: colors.border },
+    statBadge: {
+      position: 'absolute',
+      top: -4,
+      right: -12,
+      minWidth: 16,
+      height: 16,
+      borderRadius: 8,
+      paddingHorizontal: 3,
+      backgroundColor: '#FF3B30',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    statBadgeText: { color: '#FFFFFF', fontSize: 9, fontWeight: '800' },
 
     editBtn: {
       flexDirection: 'row',
@@ -1045,7 +1433,11 @@ const makeStyles = (colors: ColorScheme) =>
     doneText: { ...typography.bodyBold, color: colors.primary },
 
     label: { ...typography.caption, color: colors.textDim, marginTop: spacing.md, marginBottom: spacing.xs, fontWeight: '600' },
+    helperText: { ...typography.caption, color: colors.textFaint, marginTop: 4 },
     input: { backgroundColor: colors.cardAlt, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, color: colors.text, padding: spacing.md, ...typography.body },
+    inputError: { borderColor: '#FF3B30' },
+    inputSuccess: { borderColor: '#34C759' },
+    usernameStatusIcon: { position: 'absolute', right: spacing.md, top: 0, bottom: 0, justifyContent: 'center' },
     wrapRow: { flexDirection: 'row', flexWrap: 'wrap' },
     emojiOption: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.cardAlt, borderWidth: 1.5, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginRight: spacing.sm, marginBottom: spacing.sm },
     emojiOptionActive: { borderColor: colors.primary, backgroundColor: colors.primary + '20' },
@@ -1093,13 +1485,24 @@ const makeStyles = (colors: ColorScheme) =>
     statRowSub: { ...typography.caption, color: colors.textFaint, marginTop: 2 },
     statRowCount: { ...typography.bodyBold, color: colors.primary },
     statEmptyWrap: { paddingVertical: spacing.xl, alignItems: 'center' },
-    statEmptyText: { ...typography.body, color: colors.textFaint },
-    categoryDot: {
-      width: 10,
-      height: 10,
-      borderRadius: 5,
+    statEmptyText: { ...typography.body, color: colors.textFaint, textAlign: 'center' },
+
+    contactAcceptBtn: {
       backgroundColor: colors.primary,
-      marginRight: spacing.sm,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.sm + 4,
+      paddingVertical: 6,
+    },
+    contactAcceptBtnText: { color: colors.bg, fontWeight: '700', fontSize: 12 },
+    contactDeclineBtn: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: colors.cardAlt,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
   });
 
