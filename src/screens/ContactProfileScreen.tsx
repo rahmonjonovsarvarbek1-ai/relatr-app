@@ -8,7 +8,6 @@ import {
   Image,
   ActivityIndicator,
   Alert,
-  FlatList,
   useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -24,14 +23,24 @@ import { radius, spacing, typography } from '../theme/theme';
 import type { ColorScheme } from '../theme/theme';
 import type { FriendshipStatus } from '../types';
 import type { StoryRow, FriendStoryGroup } from '../types/storyTypes';
+
 // ---------------------------------------------------------------------
-// Route params this screen accepts. It can be reached two ways:
+// Route params this screen accepts. It can be reached several ways:
 //  1) From StoriesScreen's search/notifications with just a profile id
 //     (friendshipId is unknown yet — no friendships row may exist).
 //  2) From ProfileScreen's Contacts list, which already has the full
 //     AppContact (friendshipId, status, isIncoming all known up front).
 // Either way this screen resolves the current friendship state itself
 // via `friendships`, so navigation can pass whichever it has.
+//
+// DEFENSIVE NOTE: some callers have historically passed a
+// `friendships.id` (the friendship row's own primary key) instead of
+// the other person's `profiles.id` as `userId`. This screen detects
+// and self-corrects that case in `load()` (see `resolveTargetUserId`),
+// so a mistaken caller degrades gracefully instead of showing a false
+// "not connected" state. That said, the *real* fix belongs at the
+// call site — check every `navigation.navigate('ContactProfile', ...)`
+// and make sure `userId` is always a `profiles.id`.
 // ---------------------------------------------------------------------
 type ContactProfileParams = {
   userId: string;
@@ -85,6 +94,14 @@ const ContactProfileScreen: React.FC = () => {
 
   const settings = useProfileSettings();
 
+  // The id this screen actually operates on for every query/mutation.
+  // Starts as params.userId and is self-corrected in `load()` if that
+  // turns out to be a friendships.id instead of a profiles.id (see the
+  // note above the ContactProfileParams type).
+  const [targetUserId, setTargetUserId] = useState<string | null>(
+    isValidUuid(params?.userId) ? params.userId : null
+  );
+
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<ResolvedProfile | null>(null);
   const [friendship, setFriendship] = useState<Friendship | null>(null);
@@ -113,25 +130,116 @@ const ContactProfileScreen: React.FC = () => {
   }, [params?.userId]);
 
   // -----------------------------------------------------------------
+  // Resolves what `targetUserId` should actually be for a given raw
+  // route param. Handles the case where the caller mistakenly passed
+  // a `friendships.id` (that table's own primary key) instead of the
+  // other person's `profiles.id`.
+  //
+  // Returns null if the id can't be resolved to a real profile at all
+  // (genuinely missing/deleted user, or an RLS-hidden row).
+  // -----------------------------------------------------------------
+  const resolveTargetUserId = useCallback(
+    async (rawUserId: string, currentMeId: string): Promise<string | null> => {
+      const { data: directProfile, error: directError } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('id', rawUserId)
+        .maybeSingle();
+
+      if (directError) {
+        console.error('resolveTargetUserId (profiles) error:', directError.message);
+      }
+      if (directProfile) {
+        return rawUserId;
+      }
+
+      // Not a profiles.id — check whether it's actually a friendships.id
+      // that got passed in by mistake, and recover the real profile id
+      // from that row.
+      const { data: friendshipRow, error: friendshipLookupError } = await supabase
+        .from('friendships')
+        .select('id, requester_id, friend_id')
+        .eq('id', rawUserId)
+        .maybeSingle();
+
+      if (friendshipLookupError) {
+        console.error('resolveTargetUserId (friendships) error:', friendshipLookupError.message);
+      }
+
+      if (friendshipRow) {
+        const correctedId =
+          friendshipRow.requester_id === currentMeId
+            ? friendshipRow.friend_id
+            : friendshipRow.requester_id;
+        console.warn(
+          '[ContactProfileScreen] params.userId was actually a friendships.id, not a profiles.id.',
+          `Corrected ${rawUserId} -> ${correctedId}.`,
+          'Fix the caller that navigated here so this screen always receives a profiles.id.'
+        );
+        return correctedId;
+      }
+
+      // Genuinely unresolvable: neither a profiles row nor a
+      // friendships row exists for this id.
+      return null;
+    },
+    []
+  );
+
+  // -----------------------------------------------------------------
   // Load the target profile + the friendship row between me and them
   // (checked from both directions, same as StoriesScreen's search).
   // -----------------------------------------------------------------
   const load = useCallback(async () => {
-    if (!meId || !params?.userId) return;
+    if (!meId || !isValidUuid(params?.userId)) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
+      const resolvedId = await resolveTargetUserId(params.userId, meId);
+
+      if (!resolvedId) {
+        setTargetUserId(null);
+        setProfile(
+          params.name
+            ? {
+                id: params.userId,
+                name: params.name,
+                username: params.username ?? '',
+                emoji: params.emoji ?? '🙂',
+                avatarColor: params.avatarColor ?? colors.primary,
+                avatarUrl: params.avatarUrl,
+                interests: [],
+                isPrivate: true,
+              }
+            : null
+        );
+        setFriendship(null);
+        console.error(
+          'ContactProfile: could not resolve params.userId =',
+          params.userId,
+          'to any profiles row (directly or via friendships).'
+        );
+        return;
+      }
+
+      setTargetUserId(resolvedId);
+
       const [{ data: profileRow, error: profileError }, { data: friendshipRow, error: friendshipError }] =
         await Promise.all([
           supabase
             .from('profiles')
-            .select('id, name, username, emoji, avatar_color, avatar_url, bio, city, school, instagram, interests, private_account')
-            .eq('id', params.userId)
+            .select(
+              'id, name, username, emoji, avatar_color, avatar_url, bio, city, school, instagram, interests, private_account'
+            )
+            .eq('id', resolvedId)
             .maybeSingle(),
           supabase
             .from('friendships')
             .select('id, requester_id, friend_id, status')
             .or(
-              `and(requester_id.eq.${meId},friend_id.eq.${params.userId}),and(requester_id.eq.${params.userId},friend_id.eq.${meId})`
+              `and(requester_id.eq.${meId},friend_id.eq.${resolvedId}),and(requester_id.eq.${resolvedId},friend_id.eq.${meId})`
             )
             .maybeSingle(),
         ]);
@@ -163,7 +271,7 @@ const ContactProfileScreen: React.FC = () => {
         // screen isn't blank if the profile fetch is denied by RLS
         // for a non-contact (e.g. private accounts).
         setProfile({
-          id: params.userId,
+          id: resolvedId,
           name: params.name,
           username: params.username ?? '',
           emoji: params.emoji ?? '🙂',
@@ -173,16 +281,12 @@ const ContactProfileScreen: React.FC = () => {
           isPrivate: true,
         });
       } else {
-        // Neither a real profiles row nor fallback params came through.
-        // This is the same "id" mismatch that causes 23503 below — the
-        // userId this screen was opened with does not correspond to any
-        // row in `profiles`. Surfacing it here catches the problem
-        // before the user even tries to send a request.
         console.error(
-          'ContactProfile: no profiles row found for params.userId =',
-          params.userId,
+          'ContactProfile: no profiles row found for resolvedId =',
+          resolvedId,
           '— this id will also fail the friendships FK if a request is sent.'
         );
+        setProfile(null);
       }
 
       if (friendshipRow) {
@@ -197,7 +301,7 @@ const ContactProfileScreen: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [meId, params, colors.primary]);
+  }, [meId, params, colors.primary, resolveTargetUserId]);
 
   useEffect(() => {
     load();
@@ -209,7 +313,7 @@ const ContactProfileScreen: React.FC = () => {
   // so they can be viewed right from this profile.
   // -----------------------------------------------------------------
   const loadStories = useCallback(async () => {
-    if (!isConnected || !params?.userId) {
+    if (!isConnected || !targetUserId) {
       setStories([]);
       return;
     }
@@ -218,7 +322,7 @@ const ContactProfileScreen: React.FC = () => {
       const { data, error } = await supabase
         .from('stories')
         .select('*')
-        .eq('owner_id', params.userId)
+        .eq('owner_id', targetUserId)
         .eq('is_highlight', false)
         .gt('expires_at', new Date().toISOString())
         .order('created_at', { ascending: true });
@@ -230,7 +334,7 @@ const ContactProfileScreen: React.FC = () => {
     } finally {
       setStoriesLoading(false);
     }
-  }, [isConnected, params]);
+  }, [isConnected, targetUserId]);
 
   useEffect(() => {
     loadStories();
@@ -273,7 +377,7 @@ const ContactProfileScreen: React.FC = () => {
     return true;
   };
 
-  // Sends (or re-sends) a friend request between meId and params.userId.
+  // Sends (or re-sends) a friend request between meId and targetUserId.
   //
   // NOTE: `friendships` has a UNIQUE(requester_id, friend_id) constraint,
   // which is direction-sensitive. If a row already exists in EITHER
@@ -283,7 +387,7 @@ const ContactProfileScreen: React.FC = () => {
   // resolve to the generic "Could not send friend request" error.
   //
   // To handle this correctly we:
-  //   0) Validate meId/params.userId are well-formed UUIDs and that both
+  //   0) Validate meId/targetUserId are well-formed UUIDs and that both
   //      correspond to real `profiles` rows (this is what 23503 checks
   //      at the DB level — we check it first so the failure is clear).
   //   1) Re-check for an existing row right before writing (covers races
@@ -298,12 +402,12 @@ const ContactProfileScreen: React.FC = () => {
       Alert.alert('Xatolik', 'Sessiya topilmadi. Iltimos, qaytadan tizimga kiring.');
       return;
     }
-    if (!isValidUuid(params?.userId)) {
-      console.error('sendRequest: params.userId is missing or not a valid UUID:', params?.userId);
+    if (!isValidUuid(targetUserId)) {
+      console.error('sendRequest: targetUserId is missing or not a valid UUID:', targetUserId);
       Alert.alert('Xatolik', "Foydalanuvchi ID topilmadi yoki noto'g'ri formatda.");
       return;
     }
-    if (meId === params.userId) {
+    if (meId === targetUserId) {
       Alert.alert('Xatolik', "O'zingizga do'stlik so'rovi yubora olmaysiz.");
       return;
     }
@@ -313,7 +417,7 @@ const ContactProfileScreen: React.FC = () => {
       // Client-side pre-check for exactly the condition that causes
       // Postgres error 23503 on friendships_friend_id_fkey /
       // friendships_requester_id_fkey.
-      const targetOk = await ensureProfileExists(params.userId, 'Maqsadli foydalanuvchi');
+      const targetOk = await ensureProfileExists(targetUserId, 'Maqsadli foydalanuvchi');
       if (!targetOk) return;
 
       const meOk = await ensureProfileExists(meId, 'Sizning');
@@ -323,7 +427,7 @@ const ContactProfileScreen: React.FC = () => {
         .from('friendships')
         .select('id, status, requester_id, friend_id')
         .or(
-          `and(requester_id.eq.${meId},friend_id.eq.${params.userId}),and(requester_id.eq.${params.userId},friend_id.eq.${meId})`
+          `and(requester_id.eq.${meId},friend_id.eq.${targetUserId}),and(requester_id.eq.${targetUserId},friend_id.eq.${meId})`
         )
         .maybeSingle();
 
@@ -341,14 +445,14 @@ const ContactProfileScreen: React.FC = () => {
           .from('friendships')
           .update({
             requester_id: meId,
-            friend_id: params.userId,
+            friend_id: targetUserId,
             status: 'pending',
           })
           .eq('id', existing.id));
       } else {
         ({ error } = await supabase.from('friendships').insert({
           requester_id: meId,
-          friend_id: params.userId,
+          friend_id: targetUserId,
           status: 'pending',
         }));
       }
@@ -461,7 +565,7 @@ const ContactProfileScreen: React.FC = () => {
     stories,
     allViewed: true,
     isMine: false,
-    avatarUrl: undefined
+    avatarUrl: undefined,
   };
 
   return (

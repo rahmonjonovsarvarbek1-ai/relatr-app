@@ -178,7 +178,7 @@ const StoryViewerModal: React.FC<Props> = ({
             "hold to pause a story" — but layered on top of Relatr's
             own tap-zone navigation below rather than replacing it. */}
         <TouchableWithoutFeedback onPressIn={pauseTimer} onPressOut={resumeTimer}>
-          <View style={StyleSheet.absoluteFillObject}>
+          <View style={StyleSheet.absoluteFill}>
            <StoryMedia
   uri={current.media_url}
   mediaType={current.media_type}
@@ -371,7 +371,7 @@ const makeStyles = (colors: ColorScheme) =>
     },
     likeBtn: { alignItems: 'center', gap: 2 },
     likeCountText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-    tapZones: { ...StyleSheet.absoluteFillObject, flexDirection: 'row', top: 60 },
+    tapZones: { ...StyleSheet.absoluteFill, flexDirection: 'row', top: 60 },
     tapZoneLeft: { flex: 1 },
     tapZoneRight: { flex: 2 },
   });

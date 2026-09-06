@@ -12,12 +12,11 @@
       "bundleIdentifier": "com.sarvarbek.relatr.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSLocationWhenInUseUsageDescription": "Yaqin atrofdagi do'stlarni tavsiya qilish uchun joylashuvingiz kerak.",
-        "NSContactsUsageDescription": "Do'stlaringizni topish uchun kontaktlarga ruxsat kerak.",
-        "NSCalendarsUsageDescription": "Tug'ilgan kunlarni kalendaringizga qo'shish uchun ruxsat kerak."
+        "NSMicrophoneUsageDescription": "Ovozli xabar va audio yozish uchun mikrofonga ruxsat kerak."
       }
     },
     "android": {
+      "package": "com.sarvarbek.relatr.app",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -26,7 +25,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "android.permission.RECORD_AUDIO",
+        "RECORD_AUDIO",
         "ACCESS_FINE_LOCATION",
         "READ_CONTACTS",
         "READ_CALENDAR",
@@ -43,7 +42,24 @@
           "photosPermission": "Ilova sizga do'stlaringizga rasm qo'shish imkonini berish uchun galereyangizga kirishi kerak."
         }
       ],
-      "expo-web-browser",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Yaqin atrofdagi do'stlarni tavsiya qilish uchun joylashuvingiz kerak."
+        }
+      ],
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Do'stlaringizni topish uchun kontaktlarga ruxsat kerak."
+        }
+      ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Tug'ilgan kunlarni kalendaringizga qo'shish uchun ruxsat kerak."
+        }
+      ],
       [
         "expo-notifications",
         {
@@ -51,11 +67,10 @@
           "color": "#8B5FE0"
         }
       ],
-      "expo-location",
-      "expo-contacts",
-      "expo-calendar",
+      "expo-web-browser",
       "expo-font",
-      "expo-video"
+      "expo-video",
+      "expo-status-bar"
     ],
     "extra": {
       "eas": {

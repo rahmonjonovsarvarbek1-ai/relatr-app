@@ -11,6 +11,9 @@ interface AuthContextValue {
   session: Session | null;
   initializing: boolean;
   signInWithGoogle: () => Promise<{ error?: string }>;
+  // YANGI QO'SHILDI: Email bilan kirish va ro'yxatdan o'tish uchun tiplar
+  signInWithEmail: (email: string, password: string) => Promise<{ error?: string }>;
+  signUpWithEmail: (email: string, password: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
 }
 
@@ -84,6 +87,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
+  // YANGI QO'SHILDI: Email va parol orqali tizimga kirish (Login)
+  const signInWithEmail = useCallback(async (email: string, password: string) => {
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) return { error: error.message };
+      return {};
+    } catch (e) {
+      return { error: (e as Error).message };
+    }
+  }, []);
+
+  // YANGI QO'SHILDI: Email va parol orqali ro'yxatdan o'tish (Register)
+  const signUpWithEmail = useCallback(async (email: string, password: string) => {
+    try {
+      const { error, data } = await supabase.auth.signUp({
+        email,
+        password,
+      });
+      if (error) return { error: error.message };
+      
+      // Agar Supabase'da "Confirm Email" yoqilgan bo'lsa, sessiya darhol berilmaydi.
+      if (data.user && !data.session) {
+        return { error: "Pochtaga tasdiqlash xati yuborildi. Iltimos tekshiring." };
+      }
+      return {};
+    } catch (e) {
+      return { error: (e as Error).message };
+    }
+  }, []);
+
   // TUZATILGAN signOut FUNKSIYASI:
   const signOut = useCallback(async () => {
     try {
@@ -97,7 +133,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   return (
-    <AuthContext.Provider value={{ session, initializing, signInWithGoogle, signOut }}>
+    <AuthContext.Provider 
+      value={{ 
+        session, 
+        initializing, 
+        signInWithGoogle, 
+        signInWithEmail, // YANGI QO'SHILDI
+        signUpWithEmail, // YANGI QO'SHILDI
+        signOut 
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

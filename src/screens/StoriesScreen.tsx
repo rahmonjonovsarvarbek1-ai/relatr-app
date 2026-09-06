@@ -13,7 +13,7 @@ import {
   FlatList,
   useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import { decode } from 'base64-arraybuffer';
@@ -151,22 +151,6 @@ const StoriesScreen: React.FC = () => {
     setLoading(false);
   }, [currentUserId]);
 
-  // -------------------------------------------------------------
-  // FIX (highlights not showing after "Saved" alert):
-  // The previous version filtered/rendered fine, but two things
-  // could make a freshly-saved highlight invisible:
-  //   1) RLS on `stories` might only allow SELECT of highlight rows
-  //      you own when a policy checks `is_highlight = false` by
-  //      mistake, or the policy only covers non-highlight rows.
-  //      -> Fixed in SQL below with an explicit highlight-select policy.
-  //   2) The realtime subscription only refetches on INSERT/UPDATE/
-  //      DELETE to `stories`, which should already cover this, but
-  //      there was no error surfacing here — a silent RLS rejection
-  //      returned `data: null` and the function just bailed out
-  //      without ever telling the UI. We now log the error and keep
-  //      `highlightsLoading` state so the UI can show a retry state
-  //      instead of a permanently-empty section.
-  // -------------------------------------------------------------
   const loadHighlights = useCallback(async () => {
     if (!currentUserId) return;
     setHighlightsLoading(true);
@@ -215,14 +199,6 @@ const StoriesScreen: React.FC = () => {
     if (data) setViewedIds(new Set(data.map((r: { story_id: string }) => r.story_id)));
   }, [currentUserId]);
 
-  // -------------------------------------------------------------
-  // FIX (notifications showing only the actor's name, not their
-  // real profile photo): the notifications table only stores actor
-  // snapshot fields (name/emoji/color) at the time the DB trigger
-  // fired. To show the actor's actual current avatar photo we join
-  // against `profiles.avatar_url` live, so the row always reflects
-  // the actor's latest picture instead of a stale emoji sticker.
-  // -------------------------------------------------------------
   const loadNotifications = useCallback(async () => {
     if (!currentUserId) return;
     const { data, error } = await supabase
@@ -262,14 +238,6 @@ const StoriesScreen: React.FC = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => {
         loadNotifications();
       })
-      // FIX (friend row not appearing in the Friends story shelf right
-      // after being added): the `friends` list itself comes from
-      // AppContext, which only re-fetches on its own triggers. Once a
-      // friendship flips to 'accepted', both this screen's story data
-      // AND the app-wide friends list need to refresh, otherwise a
-      // friend who just posted a story (or who you just added) won't
-      // show up in the `groups` memo below, because `groups` is built
-      // by intersecting `friendStories` with `friends`.
       .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, () => {
         loadStories();
         if (typeof refreshFriends === 'function') {
@@ -283,10 +251,6 @@ const StoriesScreen: React.FC = () => {
     };
   }, [loadStories, loadViewedIds, loadHighlights, loadNotifications, refreshFriends]);
 
-  // -------------------------------------------------------------
-  // Group friend stories by friend (1 avatar = 1 ring, matches
-  // the "friends" row in the mock).
-  // -------------------------------------------------------------
   const groups: FriendStoryGroup[] = useMemo(() => {
     const byFriend = new Map<string, StoryRow[]>();
     friendStories.forEach((s) => {
@@ -310,7 +274,6 @@ const StoriesScreen: React.FC = () => {
       });
     });
 
-    // Unseen first
     return result.sort((a, b) => Number(a.allViewed) - Number(b.allViewed));
   }, [friendStories, friends, viewedIds]);
 
@@ -319,13 +282,6 @@ const StoriesScreen: React.FC = () => {
     [notifications]
   );
 
-  // -------------------------------------------------------------
-  // Pick media, then open the full-screen composer so the user
-  // can add text before posting. Uses the array-of-strings media
-  // types API (['images', 'videos']) rather than the deprecated
-  // ImagePicker.MediaTypeOptions enum, which expo-image-picker
-  // warns will be removed in a future SDK release.
-  // -------------------------------------------------------------
   const handlePickMedia = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
@@ -342,23 +298,10 @@ const StoriesScreen: React.FC = () => {
     if (result.canceled || !result.assets?.[0]?.uri) return;
 
     const asset = result.assets[0];
-    // asset.type from expo-image-picker is always the plain string
-    // 'image' | 'video' — there is no nested object to unwrap.
     setComposerType(asset.type === 'video' ? 'video' : 'image');
     setComposerUri(asset.uri);
   };
 
-  // -------------------------------------------------------------
-  // Publish a story: upload the media, then insert the row (plus
-  // any mention rows). Media is read via expo-file-system and
-  // decoded to an ArrayBuffer rather than fetch(uri).blob():
-  // on native (Expo Go / bare RN), fetching a local file:// URI
-  // and calling .blob() on the response silently produces a
-  // 0-byte blob on some Android/iOS builds — the upload "succeeds"
-  // but the story's media is empty, which is why stories posted
-  // from a phone could show up blank while the web build worked
-  // fine (browsers don't have this blob-from-file-uri bug).
-  // -------------------------------------------------------------
   const handlePublishStory = async (
     uri: string,
     mediaType: 'image' | 'video',
@@ -411,8 +354,6 @@ const StoriesScreen: React.FC = () => {
 
       if (insertError) throw insertError;
 
-      // Mentions live in their own join table so mentioned friends
-      // can be notified and queried independently of the story row.
       if (inserted && payload.mentionStickers.length > 0) {
         await supabase.from('story_mentions').insert(
           payload.mentionStickers.map((m) => ({
@@ -441,9 +382,6 @@ const StoriesScreen: React.FC = () => {
         .from('story_views')
         .insert({ story_id: storyId, viewer_id: currentUserId });
       if (error) {
-        // Roll back so a retry (e.g. reopening the story) is possible
-        // instead of leaving a view marked locally that never made it
-        // to the server.
         setViewedIds((prev) => {
           const next = new Set(prev);
           next.delete(storyId);
@@ -463,19 +401,10 @@ const StoriesScreen: React.FC = () => {
       .update({ read: true })
       .eq('recipient_id', currentUserId);
     if (error) {
-      // Roll back the optimistic update so the unread badge doesn't
-      // lie about what's actually been persisted.
       setNotifications(previous);
     }
   }, [currentUserId, notifications]);
 
-  // -------------------------------------------------------------
-  // Like / unlike a story. A DB trigger creates the "liked your
-  // story" notification server-side (see accompanying SQL).
-  // Throws on failure so the viewer can roll back the optimistic
-  // update and tell the user, instead of silently drifting out of
-  // sync with the server.
-  // -------------------------------------------------------------
   const toggleLike = useCallback(
     async (story: StoryRow) => {
       if (!currentUserId) return;
@@ -514,24 +443,6 @@ const StoriesScreen: React.FC = () => {
     [currentUserId]
   );
 
-  // -------------------------------------------------------------
-  // Save an existing story into a highlight (a permanent copy
-  // flagged is_highlight = true, so it survives past the 24h
-  // expiry of the original). expires_at is null rather than a
-  // far-future placeholder date — loadHighlights never filters on
-  // expires_at, so "permanent" is expressed as "no expiry" instead
-  // of "expires in the year 2099". Requires the stories.expires_at
-  // column to allow NULL (see accompanying SQL).
-  //
-  // FIX: previously this only called loadHighlights() on success,
-  // trusting that the insert always went through when `error` was
-  // falsy. If an RLS policy silently returned 0 rows affected
-  // without an actual error object (which can happen with certain
-  // Postgres/PostgREST configurations on INSERT ... RETURNING), the
-  // "Saved" alert would fire while nothing was actually persisted.
-  // We now request the inserted row back with .select().single()
-  // and only show "Saved" once we've confirmed a row came back.
-  // -------------------------------------------------------------
   const addToHighlight = useCallback(
     async (story: StoryRow, title: string) => {
       if (!currentUserId) return;
@@ -581,9 +492,6 @@ const StoriesScreen: React.FC = () => {
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* ---------------------------------------------------- */}
-        {/* Header: title + add + search + bell (matches sketch)  */}
-        {/* ---------------------------------------------------- */}
         <View style={styles.headerRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.header}>Stories</Text>
@@ -623,9 +531,6 @@ const StoriesScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* ---------------------------------------------------- */}
-        {/* Friends row — everyone else's stories, one ring each  */}
-        {/* ---------------------------------------------------- */}
         <SectionLabel icon={<Users size={13} color={colors.textDim} strokeWidth={2.2} />} title="Friends" />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.rowScroll}>
           {loading && <ActivityIndicator style={{ marginLeft: spacing.lg }} color={colors.primary} />}
@@ -657,9 +562,6 @@ const StoriesScreen: React.FC = () => {
           ))}
         </ScrollView>
 
-        {/* ---------------------------------------------------- */}
-        {/* My Story row — only the owner ever sees these here    */}
-        {/* ---------------------------------------------------- */}
         <SectionLabel title="My story" />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.rowScroll}>
           <TouchableOpacity style={styles.storyBubble} onPress={handlePickMedia} activeOpacity={0.8}>
@@ -698,11 +600,6 @@ const StoriesScreen: React.FC = () => {
           ))}
         </ScrollView>
 
-        {/* ---------------------------------------------------- */}
-        {/* Highlights row — permanent, saved-for-later stories.  */}
-        {/* Rendered as a 4-up grid of tall rounded cards, not     */}
-        {/* circular rings, to match the highlight-shelf design.   */}
-        {/* ---------------------------------------------------- */}
         <SectionLabel icon={<Star size={13} color={colors.textDim} strokeWidth={2.2} />} title="Highlights" />
         {highlightsLoading ? (
           <ActivityIndicator style={{ marginTop: spacing.sm }} color={colors.primary} />
@@ -737,7 +634,6 @@ const StoriesScreen: React.FC = () => {
         )}
       </ScrollView>
 
-      {/* Story viewer (friends or my own), sized to the device screen */}
       {activeGroup && (
         <StoryViewerModal
           group={activeGroup}
@@ -749,7 +645,6 @@ const StoriesScreen: React.FC = () => {
         />
       )}
 
-      {/* Highlight viewer reuses the same full-screen player */}
       {activeHighlight && (
         <StoryViewerModal
           group={{
@@ -770,7 +665,6 @@ const StoriesScreen: React.FC = () => {
         />
       )}
 
-      {/* Full-screen composer: add text/location/mentions before publishing */}
       {composerUri && (
         <StoryComposerModal
           uri={composerUri}
@@ -783,8 +677,6 @@ const StoriesScreen: React.FC = () => {
         />
       )}
 
-      {/* Global search: find anyone, incl. private accounts. Tapping a
-          result opens ContactProfileScreen for that user. */}
       <SearchModal
         visible={searchOpen}
         onClose={() => setSearchOpen(false)}
@@ -801,8 +693,6 @@ const StoriesScreen: React.FC = () => {
         }}
       />
 
-      {/* Notifications: likes + friend requests + new stories. Tapping a
-          notification opens the actor's ContactProfileScreen. */}
       <NotificationsModal
         visible={notifOpen}
         onClose={() => setNotifOpen(false)}
@@ -946,14 +836,9 @@ const MyStoryBubble: React.FC<{
 };
 
 // ---------------------------------------------------------------------
-// Global search modal — find anyone by name/username, including
-// private accounts you're not yet friends with. Tapping a row opens
-// that user's ContactProfileScreen via onOpenProfile.
-//
-// FIX: search results now select `avatar_url` from `profiles` and
-// render a real photo (via <Image>) when present, falling back to the
-// emoji Avatar sticker only when the user has no uploaded photo —
-// matching how ContactProfileScreen already renders avatars.
+// Global search modal — wrapped in its own SafeAreaProvider since RN's
+// <Modal> renders in a separate native window on iOS and does not
+// inherit the app-root SafeAreaProvider's insets.
 // ---------------------------------------------------------------------
 
 const SearchModal: React.FC<{
@@ -984,12 +869,6 @@ const SearchModal: React.FC<{
     }
     debounceRef.current = setTimeout(async () => {
       setSearching(true);
-      // Friendship status is checked from BOTH directions: the
-      // current user may have sent the request (requester_id) or
-      // received it (friend_id). The previous query only joined on
-      // friend_id, so a friendship the current user had initiated
-      // was invisible here and those users showed an "Add" button
-      // even though they were already friends (or pending).
       const [asRequester, asTarget] = await Promise.all([
         supabase
           .from('profiles')
@@ -1047,83 +926,82 @@ const SearchModal: React.FC<{
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
-        <View style={styles.modalHeaderRow}>
-          <View style={styles.searchInputWrap}>
-            <Search size={16} color={colors.textFaint} strokeWidth={2} style={styles.searchInputIcon} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search by name or username..."
-              placeholderTextColor={colors.textFaint}
-              value={query}
-              onChangeText={setQuery}
-              autoFocus
-            />
-          </View>
-          <TouchableOpacity onPress={onClose} style={styles.modalCloseBtn}>
-            <Text style={styles.modalCloseText}>Close</Text>
-          </TouchableOpacity>
-        </View>
-
-        {searching && <ActivityIndicator style={{ marginTop: spacing.lg }} color={colors.primary} />}
-
-        <FlatList
-          data={results}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={{ padding: spacing.lg }}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.searchRow}
-              activeOpacity={0.7}
-              onPress={() => onOpenProfile(item)}
-            >
-              {item.avatarUrl ? (
-                <Image source={{ uri: item.avatarUrl }} style={styles.searchAvatarImage} />
-              ) : (
-                <Avatar emoji={item.emoji} color={item.color} size={44} />
-              )}
-              <View style={{ flex: 1, marginLeft: spacing.sm }}>
-                <Text style={styles.searchName}>{item.name}</Text>
-                <Text style={styles.searchUsername}>
-                  @{item.username} {item.is_private ? '· Private' : ''}
-                </Text>
-              </View>
-              {!item.is_friend && (
-                <TouchableOpacity
-                  style={styles.addFriendBtn}
-                  onPress={(e) => {
-                    e.stopPropagation();
-                    sendFriendRequest(item.id);
-                  }}
-                >
-                  <UserPlus size={14} color={colors.bg} strokeWidth={2.5} />
-                  <Text style={styles.addFriendBtnText}>{item.is_private ? 'Request' : 'Add'}</Text>
-                </TouchableOpacity>
-              )}
-              {item.is_friend && (
-                <View style={styles.friendBadgeWrap}>
-                  <UserCheck size={14} color={colors.textFaint} strokeWidth={2} />
-                  <Text style={styles.friendBadge}>Friend</Text>
-                </View>
-              )}
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeaderRow}>
+            <View style={styles.searchInputWrap}>
+              <Search size={16} color={colors.textFaint} strokeWidth={2} style={styles.searchInputIcon} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search by name or username..."
+                placeholderTextColor={colors.textFaint}
+                value={query}
+                onChangeText={setQuery}
+                autoFocus
+              />
+            </View>
+            <TouchableOpacity onPress={onClose} style={styles.modalCloseBtn}>
+              <Text style={styles.modalCloseText}>Close</Text>
             </TouchableOpacity>
-          )}
-          ListEmptyComponent={
-            !searching && query.trim() ? <Text style={styles.emptyRowText}>No results found</Text> : null
-          }
-        />
-      </SafeAreaView>
+          </View>
+
+          {searching && <ActivityIndicator style={{ marginTop: spacing.lg }} color={colors.primary} />}
+
+          <FlatList
+            data={results}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={{ padding: spacing.lg }}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.searchRow}
+                activeOpacity={0.7}
+                onPress={() => onOpenProfile(item)}
+              >
+                {item.avatarUrl ? (
+                  <Image source={{ uri: item.avatarUrl }} style={styles.searchAvatarImage} />
+                ) : (
+                  <Avatar emoji={item.emoji} color={item.color} size={44} />
+                )}
+                <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                  <Text style={styles.searchName}>{item.name}</Text>
+                  <Text style={styles.searchUsername}>
+                    @{item.username} {item.is_private ? '· Private' : ''}
+                  </Text>
+                </View>
+                {!item.is_friend && (
+                  <TouchableOpacity
+                    style={styles.addFriendBtn}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      sendFriendRequest(item.id);
+                    }}
+                  >
+                    <UserPlus size={14} color={colors.bg} strokeWidth={2.5} />
+                    <Text style={styles.addFriendBtnText}>{item.is_private ? 'Request' : 'Add'}</Text>
+                  </TouchableOpacity>
+                )}
+                {item.is_friend && (
+                  <View style={styles.friendBadgeWrap}>
+                    <UserCheck size={14} color={colors.textFaint} strokeWidth={2} />
+                    <Text style={styles.friendBadge}>Friend</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={
+              !searching && query.trim() ? <Text style={styles.emptyRowText}>No results found</Text> : null
+            }
+          />
+        </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   );
 };
 
 // ---------------------------------------------------------------------
-// Notifications modal — story likes + follow requests + new stories.
-// Tapping a row opens the actor's ContactProfileScreen via onOpenProfile.
-//
-// FIX: rows now show the actor's real profile photo (actor_avatar_url,
-// joined live from `profiles` in loadNotifications) instead of only
-// the emoji/color snapshot stored on the notification row itself.
+// Notifications modal — same fix: wrapped in its own SafeAreaProvider
+// so the header never renders under the status bar/notch inside the
+// modal's separate native window.
 // ---------------------------------------------------------------------
 
 const NotificationsModal: React.FC<{
@@ -1165,40 +1043,42 @@ const NotificationsModal: React.FC<{
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={styles.modalSafe}>
-        <View style={styles.modalHeaderRow}>
-          <Text style={styles.modalTitle}>Notifications</Text>
-          <TouchableOpacity onPress={onClose} style={styles.modalCloseBtn}>
-            <Text style={styles.modalCloseText}>Close</Text>
-          </TouchableOpacity>
-        </View>
-
-        <FlatList
-          data={notifications}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={{ padding: spacing.lg }}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[styles.notifRow, !item.read && styles.notifRowUnread]}
-              activeOpacity={0.7}
-              onPress={() => onOpenProfile(item)}
-            >
-              <View style={styles.notifAvatarWrap}>
-                {(item as any).actor_avatar_url ? (
-                  <Image source={{ uri: (item as any).actor_avatar_url }} style={styles.notifAvatarImage} />
-                ) : (
-                  <Avatar emoji={item.actor_emoji} color={item.actor_color} size={40} />
-                )}
-                <View style={styles.notifIconBadge}>
-                  <NotifIcon type={item.type} />
-                </View>
-              </View>
-              <Text style={styles.notifText}>{describe(item)}</Text>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeaderRow}>
+            <Text style={styles.modalTitle}>Notifications</Text>
+            <TouchableOpacity onPress={onClose} style={styles.modalCloseBtn}>
+              <Text style={styles.modalCloseText}>Close</Text>
             </TouchableOpacity>
-          )}
-          ListEmptyComponent={<Text style={styles.emptyRowText}>No notifications yet</Text>}
-        />
-      </SafeAreaView>
+          </View>
+
+          <FlatList
+            data={notifications}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={{ padding: spacing.lg }}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={[styles.notifRow, !item.read && styles.notifRowUnread]}
+                activeOpacity={0.7}
+                onPress={() => onOpenProfile(item)}
+              >
+                <View style={styles.notifAvatarWrap}>
+                  {(item as any).actor_avatar_url ? (
+                    <Image source={{ uri: (item as any).actor_avatar_url }} style={styles.notifAvatarImage} />
+                  ) : (
+                    <Avatar emoji={item.actor_emoji} color={item.actor_color} size={40} />
+                  )}
+                  <View style={styles.notifIconBadge}>
+                    <NotifIcon type={item.type} />
+                  </View>
+                </View>
+                <Text style={styles.notifText}>{describe(item)}</Text>
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={<Text style={styles.emptyRowText}>No notifications yet</Text>}
+          />
+        </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   );
 };
@@ -1303,12 +1183,12 @@ const makeStyles = (colors: ColorScheme) => StyleSheet.create({
     marginBottom: spacing.sm,
   },
   highlightCardImage: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     width: undefined,
     height: undefined,
   },
   highlightCardOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.18)',
   },
   highlightCardTitle: {

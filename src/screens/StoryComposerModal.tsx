@@ -224,7 +224,7 @@ const StoryComposerModal: React.FC<Props> = ({
       >
         <TouchableOpacity
           activeOpacity={1}
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
           onPress={() => setSelectedId(null)}
         >
           {/*

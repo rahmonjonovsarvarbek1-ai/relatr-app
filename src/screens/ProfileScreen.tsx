@@ -29,9 +29,8 @@ import { useAuth } from '../context/AuthContext';
 import { useProfileSettings } from '../hooks/useProfileSettings';
 import { requestNotificationPermissionsAsync } from '../utils/notifications';
 import type { AppContact } from '../types';
-// To'g'risi:
 import { supabase } from '../utils/supabase';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 
 type BlockedUserSummary = { id: string; name: string; username: string };
 
@@ -702,27 +701,39 @@ const ProfileScreen: React.FC = () => {
         <View style={{ height: spacing.xxl }} />
       </ScrollView>
 
-      {/* STAT DETAIL FULL-SCREEN MODAL (Friends / Favorites / Contacts) */}
+      {/* -----------------------------------------------------------------
+          STAT DETAIL FULL-SCREEN MODAL (Friends / Favorites / Contacts)
+
+          FIX: wrapped in its own SafeAreaProvider (with initialMetrics).
+          RN's <Modal> renders in a separate native window on iOS, so the
+          root-level SafeAreaProvider's insets are not inherited here.
+          Without this, the header could render under the status bar/notch
+          on first open. initialWindowMetrics also removes the one-frame
+          "flash" while the provider measures insets asynchronously.
+      ------------------------------------------------------------------ */}
       <Modal
         visible={statModal !== null}
         animationType="slide"
         onRequestClose={() => setStatModal(null)}
       >
-        <SafeAreaView style={styles.settingsSafe}>
-          <View style={styles.settingsTopBar}>
-            <TouchableOpacity onPress={() => setStatModal(null)} hitSlop={10} style={styles.settingsBackBtn}>
-              <Ionicons name="close" size={24} color={colors.text} />
-            </TouchableOpacity>
-            <Text style={styles.settingsTitle}>{getStatModalTitle()}</Text>
-            <View style={{ width: 24 }} />
-          </View>
-          <View style={{ flex: 1, paddingHorizontal: spacing.lg, paddingTop: spacing.md }}>
-            {renderStatModalContent()}
-          </View>
-        </SafeAreaView>
+        <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+          <SafeAreaView style={styles.settingsSafe}>
+            <View style={styles.settingsTopBar}>
+              <TouchableOpacity onPress={() => setStatModal(null)} hitSlop={10} style={styles.settingsBackBtn}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+              <Text style={styles.settingsTitle}>{getStatModalTitle()}</Text>
+              <View style={{ width: 24 }} />
+            </View>
+            <View style={{ flex: 1, paddingHorizontal: spacing.lg, paddingTop: spacing.md }}>
+              {renderStatModalContent()}
+            </View>
+          </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
 
-      {/* EDIT PROFILE MODAL */}
+      {/* EDIT PROFILE MODAL — transparent bottom sheet, no top-inset risk,
+          so it does not need the SafeAreaProvider wrapper. */}
       <Modal visible={editing} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -909,244 +920,253 @@ const ProfileScreen: React.FC = () => {
         </View>
       </Modal>
 
-      {/* FULL-SCREEN SETTINGS MODAL */}
+      {/* -----------------------------------------------------------------
+          FULL-SCREEN SETTINGS MODAL
+
+          FIX: same SafeAreaProvider wrap as the stat modal above, for the
+          same reason — this is a full-screen RN <Modal>, not a screen
+          reached via React Navigation, so it never inherits the root
+          SafeAreaProvider's insets on its own.
+      ------------------------------------------------------------------ */}
       <Modal visible={settingsOpen} animationType="slide" onRequestClose={closeSettings}>
-        <SafeAreaView style={styles.settingsSafe}>
-          <View style={styles.settingsTopBar}>
-            <TouchableOpacity
-              onPress={() => (settingsPage === 'main' ? closeSettings() : setSettingsPage('main'))}
-              hitSlop={10}
-              style={styles.settingsBackBtn}
-            >
-              <Ionicons name={settingsPage === 'main' ? 'close' : 'chevron-back'} size={24} color={colors.text} />
-            </TouchableOpacity>
-            <Text style={styles.settingsTitle}>
-              {settingsPage === 'main' && 'Settings'}
-              {settingsPage === 'notifications' && 'Notifications'}
-              {settingsPage === 'calendar' && 'Contact & Calendar Sync'}
-              {settingsPage === 'privacy' && 'Privacy'}
-              {settingsPage === 'about' && 'About'}
-              {settingsPage === 'blocked' && 'Blocked Users'}
-              {settingsPage === '2fa' && 'Two-Factor Authentication'}
-              {settingsPage === 'password' && 'Change Password'}
-            </Text>
-            <View style={{ width: 24 }} />
-          </View>
+        <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+          <SafeAreaView style={styles.settingsSafe}>
+            <View style={styles.settingsTopBar}>
+              <TouchableOpacity
+                onPress={() => (settingsPage === 'main' ? closeSettings() : setSettingsPage('main'))}
+                hitSlop={10}
+                style={styles.settingsBackBtn}
+              >
+                <Ionicons name={settingsPage === 'main' ? 'close' : 'chevron-back'} size={24} color={colors.text} />
+              </TouchableOpacity>
+              <Text style={styles.settingsTitle}>
+                {settingsPage === 'main' && 'Settings'}
+                {settingsPage === 'notifications' && 'Notifications'}
+                {settingsPage === 'calendar' && 'Contact & Calendar Sync'}
+                {settingsPage === 'privacy' && 'Privacy'}
+                {settingsPage === 'about' && 'About'}
+                {settingsPage === 'blocked' && 'Blocked Users'}
+                {settingsPage === '2fa' && 'Two-Factor Authentication'}
+                {settingsPage === 'password' && 'Change Password'}
+              </Text>
+              <View style={{ width: 24 }} />
+            </View>
 
-          <ScrollView contentContainerStyle={styles.settingsScroll} showsVerticalScrollIndicator={false}>
-            {settingsPage === 'main' && (
-              <>
-                <Text style={styles.sectionLabel}>PREFERENCES</Text>
-                <View style={styles.settingsGroup}>
-                  <SettingRow icon="notifications-outline" label="Notifications" onPress={() => setSettingsPage('notifications')} colors={colors} />
-                  <SettingRow icon="cloud-upload-outline" label="Contact & Calendar Sync" onPress={() => setSettingsPage('calendar')} colors={colors} />
-                  <SettingRow icon="lock-closed-outline" label="Privacy" onPress={() => setSettingsPage('privacy')} colors={colors} last />
-                </View>
-
-                <Text style={styles.sectionLabel}>SUPPORT</Text>
-                <View style={styles.settingsGroup}>
-                  <SettingRow icon="information-circle-outline" label="About" onPress={() => setSettingsPage('about')} colors={colors} last />
-                </View>
-
-                <Text style={styles.sectionLabel}>ACCOUNT</Text>
-                <View style={styles.settingsGroup}>
-                  <SettingRow icon="log-out-outline" label="Log out" onPress={confirmLogOut} colors={colors} danger />
-                  <SettingRow icon="trash-outline" label="Delete account" onPress={confirmDeleteAccount} colors={colors} danger last />
-                </View>
-              </>
-            )}
-
-            {settingsPage === 'notifications' && (
-              <View style={styles.settingsGroup}>
-                <ToggleRow label="Push notifications" value={profile.pushEnabled} onChange={setPushEnabled} colors={colors} />
-                <ToggleRow label="Messages" value={profile.messageNotif} onChange={setMessageNotif} colors={colors} />
-                <ToggleRow label="Likes & comments" value={profile.likesNotif} onChange={setLikesNotif} colors={colors} />
-                <ToggleRow label="Sound" value={profile.soundEnabled} onChange={setSoundEnabled} colors={colors} last />
-              </View>
-            )}
-
-            {settingsPage === 'calendar' && (
-              <View style={styles.settingsGroup}>
-                <ToggleRow label="Sync contacts" value={profile.syncContacts} onChange={setSyncContacts} colors={colors} />
-                <ToggleRow label="Sync calendar" value={profile.syncCalendar} onChange={setSyncCalendar} colors={colors} last />
-              </View>
-            )}
-
-            {settingsPage === 'privacy' && (
-              <>
-                <View style={styles.settingsGroup}>
-                  <ToggleRow label="Private account" value={profile.privateAccount} onChange={setPrivateAccount} colors={colors} />
-                  <ToggleRow label="Show activity status" value={profile.activityStatus} onChange={setActivityStatus} colors={colors} last />
-                </View>
-                <View style={styles.settingsGroup}>
-                  <SettingRow
-                    icon="shield-checkmark-outline"
-                    label={`Two-Factor Authentication${profile.mfaEnabled ? ' · On' : ''}`}
-                    onPress={() => goToPage('2fa')}
-                    colors={colors}
-                  />
-                  <SettingRow icon="key-outline" label="Change password" onPress={() => goToPage('password')} colors={colors} />
-                  <SettingRow icon="ban-outline" label="Blocked users" onPress={() => goToPage('blocked')} colors={colors} last />
-                </View>
-              </>
-            )}
-
-            {settingsPage === 'about' && (
-              <View style={styles.settingsGroup}>
-                <DetailRow icon="apps-outline" label="Version 1.0.0" colors={colors} />
-                <SettingRow icon="document-text-outline" label="Terms of Service" onPress={() => Linking.openURL(TERMS_URL)} colors={colors} />
-                <SettingRow icon="shield-outline" label="Privacy Policy" onPress={() => Linking.openURL(PRIVACY_URL)} colors={colors} last />
-              </View>
-            )}
-
-            {settingsPage === 'blocked' && (
-              <View style={styles.settingsGroup}>
-                {settings.blockedLoading ? (
-                  <View style={{ padding: spacing.lg, alignItems: 'center' }}>
-                    <ActivityIndicator color={colors.primary} />
+            <ScrollView contentContainerStyle={styles.settingsScroll} showsVerticalScrollIndicator={false}>
+              {settingsPage === 'main' && (
+                <>
+                  <Text style={styles.sectionLabel}>PREFERENCES</Text>
+                  <View style={styles.settingsGroup}>
+                    <SettingRow icon="notifications-outline" label="Notifications" onPress={() => setSettingsPage('notifications')} colors={colors} />
+                    <SettingRow icon="cloud-upload-outline" label="Contact & Calendar Sync" onPress={() => setSettingsPage('calendar')} colors={colors} />
+                    <SettingRow icon="lock-closed-outline" label="Privacy" onPress={() => setSettingsPage('privacy')} colors={colors} last />
                   </View>
-                ) : settings.blockedUsers.length === 0 ? (
-                  <View style={{ padding: spacing.lg }}>
-                    <Text style={{ ...typography.body, color: colors.textFaint }}>No blocked users.</Text>
+
+                  <Text style={styles.sectionLabel}>SUPPORT</Text>
+                  <View style={styles.settingsGroup}>
+                    <SettingRow icon="information-circle-outline" label="About" onPress={() => setSettingsPage('about')} colors={colors} last />
                   </View>
-                ) : (
-                  settings.blockedUsers.map((u: BlockedUserSummary, idx: number) => (
-                    <View
-                      key={u.id}
-                      style={[styles.settingRow, idx !== settings.blockedUsers.length - 1 && styles.settingRowBorder]}
-                    >
-                      <Avatar emoji="🙂" color={colors.primary} size={28} />
-                      <View style={{ marginLeft: spacing.sm, flex: 1 }}>
-                        <Text style={styles.settingText}>{u.name}</Text>
-                        <Text style={{ ...typography.caption, color: colors.textFaint }}>{u.username}</Text>
-                      </View>
-                      <TouchableOpacity
-                        onPress={() =>
-                          Alert.alert('Unblock', `Unblock ${u.name}?`, [
-                            { text: 'Cancel', style: 'cancel' },
-                            { text: 'Unblock', onPress: () => settings.unblockUser(u.id) },
-                          ])
-                        }
+
+                  <Text style={styles.sectionLabel}>ACCOUNT</Text>
+                  <View style={styles.settingsGroup}>
+                    <SettingRow icon="log-out-outline" label="Log out" onPress={confirmLogOut} colors={colors} danger />
+                    <SettingRow icon="trash-outline" label="Delete account" onPress={confirmDeleteAccount} colors={colors} danger last />
+                  </View>
+                </>
+              )}
+
+              {settingsPage === 'notifications' && (
+                <View style={styles.settingsGroup}>
+                  <ToggleRow label="Push notifications" value={profile.pushEnabled} onChange={setPushEnabled} colors={colors} />
+                  <ToggleRow label="Messages" value={profile.messageNotif} onChange={setMessageNotif} colors={colors} />
+                  <ToggleRow label="Likes & comments" value={profile.likesNotif} onChange={setLikesNotif} colors={colors} />
+                  <ToggleRow label="Sound" value={profile.soundEnabled} onChange={setSoundEnabled} colors={colors} last />
+                </View>
+              )}
+
+              {settingsPage === 'calendar' && (
+                <View style={styles.settingsGroup}>
+                  <ToggleRow label="Sync contacts" value={profile.syncContacts} onChange={setSyncContacts} colors={colors} />
+                  <ToggleRow label="Sync calendar" value={profile.syncCalendar} onChange={setSyncCalendar} colors={colors} last />
+                </View>
+              )}
+
+              {settingsPage === 'privacy' && (
+                <>
+                  <View style={styles.settingsGroup}>
+                    <ToggleRow label="Private account" value={profile.privateAccount} onChange={setPrivateAccount} colors={colors} />
+                    <ToggleRow label="Show activity status" value={profile.activityStatus} onChange={setActivityStatus} colors={colors} last />
+                  </View>
+                  <View style={styles.settingsGroup}>
+                    <SettingRow
+                      icon="shield-checkmark-outline"
+                      label={`Two-Factor Authentication${profile.mfaEnabled ? ' · On' : ''}`}
+                      onPress={() => goToPage('2fa')}
+                      colors={colors}
+                    />
+                    <SettingRow icon="key-outline" label="Change password" onPress={() => goToPage('password')} colors={colors} />
+                    <SettingRow icon="ban-outline" label="Blocked users" onPress={() => goToPage('blocked')} colors={colors} last />
+                  </View>
+                </>
+              )}
+
+              {settingsPage === 'about' && (
+                <View style={styles.settingsGroup}>
+                  <DetailRow icon="apps-outline" label="Version 1.0.0" colors={colors} />
+                  <SettingRow icon="document-text-outline" label="Terms of Service" onPress={() => Linking.openURL(TERMS_URL)} colors={colors} />
+                  <SettingRow icon="shield-outline" label="Privacy Policy" onPress={() => Linking.openURL(PRIVACY_URL)} colors={colors} last />
+                </View>
+              )}
+
+              {settingsPage === 'blocked' && (
+                <View style={styles.settingsGroup}>
+                  {settings.blockedLoading ? (
+                    <View style={{ padding: spacing.lg, alignItems: 'center' }}>
+                      <ActivityIndicator color={colors.primary} />
+                    </View>
+                  ) : settings.blockedUsers.length === 0 ? (
+                    <View style={{ padding: spacing.lg }}>
+                      <Text style={{ ...typography.body, color: colors.textFaint }}>No blocked users.</Text>
+                    </View>
+                  ) : (
+                    settings.blockedUsers.map((u: BlockedUserSummary, idx: number) => (
+                      <View
+                        key={u.id}
+                        style={[styles.settingRow, idx !== settings.blockedUsers.length - 1 && styles.settingRowBorder]}
                       >
-                        <Text style={{ ...typography.bodyBold, color: colors.primary }}>Unblock</Text>
+                        <Avatar emoji="🙂" color={colors.primary} size={28} />
+                        <View style={{ marginLeft: spacing.sm, flex: 1 }}>
+                          <Text style={styles.settingText}>{u.name}</Text>
+                          <Text style={{ ...typography.caption, color: colors.textFaint }}>{u.username}</Text>
+                        </View>
+                        <TouchableOpacity
+                          onPress={() =>
+                            Alert.alert('Unblock', `Unblock ${u.name}?`, [
+                              { text: 'Cancel', style: 'cancel' },
+                              { text: 'Unblock', onPress: () => settings.unblockUser(u.id) },
+                            ])
+                          }
+                        >
+                          <Text style={{ ...typography.bodyBold, color: colors.primary }}>Unblock</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ))
+                  )}
+                </View>
+              )}
+
+              {settingsPage === '2fa' && (
+                <View>
+                  {profile.mfaEnabled ? (
+                    <View style={styles.settingsGroup}>
+                      <View style={styles.settingRow}>
+                        <Ionicons name="shield-checkmark" size={18} color={colors.primary} />
+                        <Text style={[styles.settingText, { marginLeft: spacing.sm }]}>
+                          Two-factor authentication is on
+                        </Text>
+                      </View>
+                    </View>
+                  ) : mfaQr ? (
+                    <View style={{ paddingHorizontal: spacing.md }}>
+                      <Text style={{ ...typography.body, color: colors.text, marginBottom: spacing.md }}>
+                        Scan this QR code with Google Authenticator, Authy, or a similar app.
+                      </Text>
+                      {/* mfaQr Supabase'dan SVG data-URI ko'rinishida keladi */}
+                      <Image source={{ uri: mfaQr }} style={styles.qrImage} />
+                      {!!mfaSecret && (
+                        <Text style={{ ...typography.caption, color: colors.textFaint, marginTop: spacing.sm }}>
+                          Can't scan? Enter this code manually: {mfaSecret}
+                        </Text>
+                      )}
+                      <Text style={styles.label}>Enter the 6-digit code</Text>
+                      <TextInput
+                        style={styles.input}
+                        value={mfaCode}
+                        onChangeText={setMfaCode}
+                        keyboardType="number-pad"
+                        maxLength={6}
+                        placeholder="123456"
+                        placeholderTextColor={colors.textFaint}
+                      />
+                      {!!mfaError && <Text style={styles.errorText}>{mfaError}</Text>}
+                      <TouchableOpacity
+                        style={[styles.saveBtn, settings.mfaLoading && { opacity: 0.6 }]}
+                        onPress={confirmMfaCode}
+                        disabled={settings.mfaLoading || mfaCode.trim().length !== 6}
+                      >
+                        {settings.mfaLoading ? (
+                          <ActivityIndicator color={colors.bg} />
+                        ) : (
+                          <Text style={styles.saveBtnText}>Verify & Enable</Text>
+                        )}
                       </TouchableOpacity>
                     </View>
-                  ))
-                )}
-              </View>
-            )}
-
-            {settingsPage === '2fa' && (
-              <View>
-                {profile.mfaEnabled ? (
-                  <View style={styles.settingsGroup}>
-                    <View style={styles.settingRow}>
-                      <Ionicons name="shield-checkmark" size={18} color={colors.primary} />
-                      <Text style={[styles.settingText, { marginLeft: spacing.sm }]}>
-                        Two-factor authentication is on
-                      </Text>
-                    </View>
-                  </View>
-                ) : mfaQr ? (
-                  <View style={{ paddingHorizontal: spacing.md }}>
-                    <Text style={{ ...typography.body, color: colors.text, marginBottom: spacing.md }}>
-                      Scan this QR code with Google Authenticator, Authy, or a similar app.
-                    </Text>
-                    {/* mfaQr Supabase'dan SVG data-URI ko'rinishida keladi */}
-                    <Image source={{ uri: mfaQr }} style={styles.qrImage} />
-                    {!!mfaSecret && (
-                      <Text style={{ ...typography.caption, color: colors.textFaint, marginTop: spacing.sm }}>
-                        Can't scan? Enter this code manually: {mfaSecret}
-                      </Text>
-                    )}
-                    <Text style={styles.label}>Enter the 6-digit code</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={mfaCode}
-                      onChangeText={setMfaCode}
-                      keyboardType="number-pad"
-                      maxLength={6}
-                      placeholder="123456"
-                      placeholderTextColor={colors.textFaint}
-                    />
-                    {!!mfaError && <Text style={styles.errorText}>{mfaError}</Text>}
-                    <TouchableOpacity
-                      style={[styles.saveBtn, settings.mfaLoading && { opacity: 0.6 }]}
-                      onPress={confirmMfaCode}
-                      disabled={settings.mfaLoading || mfaCode.trim().length !== 6}
-                    >
-                      {settings.mfaLoading ? (
-                        <ActivityIndicator color={colors.bg} />
-                      ) : (
-                        <Text style={styles.saveBtnText}>Verify & Enable</Text>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                ) : (
-                  <View style={{ paddingHorizontal: spacing.md }}>
-                    <Text style={{ ...typography.body, color: colors.textDim, marginBottom: spacing.md }}>
-                      Add an extra layer of security to your account using an authenticator app.
-                    </Text>
-                    {!!mfaError && <Text style={styles.errorText}>{mfaError}</Text>}
-                    <TouchableOpacity
-                      style={[styles.saveBtn, settings.mfaLoading && { opacity: 0.6 }]}
-                      onPress={beginMfaEnrollment}
-                      disabled={settings.mfaLoading}
-                    >
-                      {settings.mfaLoading ? (
-                        <ActivityIndicator color={colors.bg} />
-                      ) : (
-                        <Text style={styles.saveBtnText}>Set up two-factor authentication</Text>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                )}
-
-                {profile.mfaEnabled && (
-                  <TouchableOpacity style={{ marginTop: spacing.lg, alignItems: 'center' }} onPress={handleDisableMfa}>
-                    <Text style={{ ...typography.bodyBold, color: '#FF3B30' }}>Turn off two-factor authentication</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            )}
-
-            {settingsPage === 'password' && (
-              <View style={{ paddingHorizontal: spacing.md }}>
-                <Text style={styles.label}>New password</Text>
-                <TextInput
-                  style={styles.input}
-                  value={newPassword}
-                  onChangeText={setNewPassword}
-                  secureTextEntry
-                  placeholder="At least 8 characters"
-                  placeholderTextColor={colors.textFaint}
-                />
-                <Text style={styles.label}>Confirm new password</Text>
-                <TextInput
-                  style={styles.input}
-                  value={confirmPassword}
-                  onChangeText={setConfirmPassword}
-                  secureTextEntry
-                  placeholderTextColor={colors.textFaint}
-                />
-                {!!passwordError && <Text style={styles.errorText}>{passwordError}</Text>}
-                <TouchableOpacity
-                  style={[styles.saveBtn, passwordSaving && { opacity: 0.6 }]}
-                  onPress={submitPasswordChange}
-                  disabled={passwordSaving || !newPassword || !confirmPassword}
-                >
-                  {passwordSaving ? (
-                    <ActivityIndicator color={colors.bg} />
                   ) : (
-                    <Text style={styles.saveBtnText}>Update password</Text>
+                    <View style={{ paddingHorizontal: spacing.md }}>
+                      <Text style={{ ...typography.body, color: colors.textDim, marginBottom: spacing.md }}>
+                        Add an extra layer of security to your account using an authenticator app.
+                      </Text>
+                      {!!mfaError && <Text style={styles.errorText}>{mfaError}</Text>}
+                      <TouchableOpacity
+                        style={[styles.saveBtn, settings.mfaLoading && { opacity: 0.6 }]}
+                        onPress={beginMfaEnrollment}
+                        disabled={settings.mfaLoading}
+                      >
+                        {settings.mfaLoading ? (
+                          <ActivityIndicator color={colors.bg} />
+                        ) : (
+                          <Text style={styles.saveBtnText}>Set up two-factor authentication</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
                   )}
-                </TouchableOpacity>
-              </View>
-            )}
 
-            <View style={{ height: spacing.xxl }} />
-          </ScrollView>
-        </SafeAreaView>
+                  {profile.mfaEnabled && (
+                    <TouchableOpacity style={{ marginTop: spacing.lg, alignItems: 'center' }} onPress={handleDisableMfa}>
+                      <Text style={{ ...typography.bodyBold, color: '#FF3B30' }}>Turn off two-factor authentication</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+
+              {settingsPage === 'password' && (
+                <View style={{ paddingHorizontal: spacing.md }}>
+                  <Text style={styles.label}>New password</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={newPassword}
+                    onChangeText={setNewPassword}
+                    secureTextEntry
+                    placeholder="At least 8 characters"
+                    placeholderTextColor={colors.textFaint}
+                  />
+                  <Text style={styles.label}>Confirm new password</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                    secureTextEntry
+                    placeholderTextColor={colors.textFaint}
+                  />
+                  {!!passwordError && <Text style={styles.errorText}>{passwordError}</Text>}
+                  <TouchableOpacity
+                    style={[styles.saveBtn, passwordSaving && { opacity: 0.6 }]}
+                    onPress={submitPasswordChange}
+                    disabled={passwordSaving || !newPassword || !confirmPassword}
+                  >
+                    {passwordSaving ? (
+                      <ActivityIndicator color={colors.bg} />
+                    ) : (
+                      <Text style={styles.saveBtnText}>Update password</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              <View style={{ height: spacing.xxl }} />
+            </ScrollView>
+          </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
     </SafeAreaView>
   );
