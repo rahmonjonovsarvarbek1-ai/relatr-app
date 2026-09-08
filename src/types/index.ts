@@ -114,6 +114,10 @@ export interface UserProfile {
   blockedUserIds: string[];
   mfaEnabled: boolean;
   // --------------------------------------
+
+  // ---------------- NEW: onboarding ----------------
+  onboardingCompleted: boolean;
+  // --------------------------------------
 }
 
 export interface WorldSpecialDay {
@@ -254,6 +258,10 @@ export interface ProfileRow {
   activity_status: boolean;
   blocked_user_ids: string[];
   // --------------------------------------
+
+  // ---------------- NEW: onboarding ----------------
+  onboarding_completed: boolean;
+  // --------------------------------------
 }
 
 export interface BlockedUserRow {
@@ -280,7 +288,7 @@ export interface WorldHolidayRow {
 // ---------------- NEW: App Contacts ----------------
 export interface FriendshipRow {
   id: string;
-  requester_id: string;
+  user_id: string;
   friend_id: string;
   status: FriendshipStatus;
   created_at: string;

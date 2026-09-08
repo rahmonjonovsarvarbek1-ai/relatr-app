@@ -18,7 +18,7 @@ export interface BlockedUserSummary {
 }
 
 // -----------------------------------------------------------------
-// Username mavjudligi va formatini tekshirish uchun hook
+// Hook to check username availability and format
 // -----------------------------------------------------------------
 export function useUsernameCheck(currentUsername: string) {
   const [usernameStatus, setUsernameStatus] = useState<UsernameCheckStatus>('idle');
@@ -26,7 +26,7 @@ export function useUsernameCheck(currentUsername: string) {
   const requestIdRef = useRef(0);
 
   const validateFormat = (value: string): boolean => {
-    // 3-20 belgi, lotin harf/raqam/._ bilan, harf bilan boshlanadi
+    // 3-20 chars, lowercase letters/numbers/._ , must start with a letter
     const re = /^[a-z][a-z0-9._]{2,19}$/;
     return re.test(value);
   };
@@ -37,7 +37,7 @@ export function useUsernameCheck(currentUsername: string) {
 
       if (debounceRef.current) clearTimeout(debounceRef.current);
 
-      // O'zining joriy username'i bo'lsa — darhol "idle"
+      // If it's the user's current username, no need to check
       if (normalized === currentUsername.toLowerCase()) {
         setUsernameStatus('idle');
         return;
@@ -62,7 +62,7 @@ export function useUsernameCheck(currentUsername: string) {
             p_username: normalized,
           });
 
-          // Race condition oldini olish
+          // Avoid race conditions
           if (myRequestId !== requestIdRef.current) return;
 
           if (error) {
@@ -132,41 +132,53 @@ export function useProfileSettings() {
   const instanceIdRef = useRef(Math.random().toString(36).slice(2));
 
   const loadContacts = useCallback(async () => {
-    if (!userId) return;
-    setContactsLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('friendships')
-        .select(
-          `id, requester_id, friend_id, status, created_at, updated_at,
-           requester:profiles!friendships_requester_id_fkey(id, name, username, emoji, avatar_color, avatar_url),
-           target:profiles!friendships_friend_id_fkey(id, name, username, emoji, avatar_color, avatar_url)`
-        )
-        .or(`requester_id.eq.${userId},friend_id.eq.${userId}`)
-        .order('created_at', { ascending: false });
+  if (!userId) return;
+  setContactsLoading(true);
+  try {
+    const { data: rows, error } = await supabase
+      .from('friendships')
+      .select('id, user_id, friend_id, status, created_at')
+      .or(`user_id.eq.${userId},friend_id.eq.${userId}`)
+      .order('created_at', { ascending: false });
 
-      if (error) {
-        console.error('loadContacts error:', error.message);
-        return;
-      }
-
-      const list: AppContact[] = (data ?? []).map((row: any) => {
-        const otherProfile: ContactProfileRow =
-          row.requester_id === userId ? row.target : row.requester;
-        return toAppContact(row as FriendshipRow, otherProfile, userId);
-      });
-
-      list.sort((a, b) => {
-        const rank = (c: AppContact) =>
-          c.status === 'pending' && c.isIncoming ? 0 : c.status === 'accepted' ? 1 : 2;
-        return rank(a) - rank(b);
-      });
-
-      setContacts(list);
-    } finally {
-      setContactsLoading(false);
+    if (error) {
+      console.error('loadContacts error:', error.message);
+      return;
     }
-  }, [userId]);
+
+    const otherIds = Array.from(
+      new Set((rows ?? []).map((r) => (r.user_id === userId ? r.friend_id : r.user_id)))
+    );
+
+    const { data: profilesData, error: profilesError } = await supabase
+      .from('profiles')
+      .select('id, name, username, emoji, avatar_color, avatar_url')
+      .in('id', otherIds.length > 0 ? otherIds : ['00000000-0000-0000-0000-000000000000']);
+
+    if (profilesError) {
+      console.error('loadContacts profiles error:', profilesError.message);
+      return;
+    }
+
+    const profileMap = new Map((profilesData ?? []).map((p) => [p.id, p]));
+
+    const list: AppContact[] = (rows ?? []).map((row) => {
+      const otherId = row.user_id === userId ? row.friend_id : row.user_id;
+      const otherProfile = profileMap.get(otherId) as ContactProfileRow;
+      return toAppContact(row as FriendshipRow, otherProfile, userId);
+    });
+
+    list.sort((a, b) => {
+      const rank = (c: AppContact) =>
+        c.status === 'pending' && c.isIncoming ? 0 : c.status === 'accepted' ? 1 : 2;
+      return rank(a) - rank(b);
+    });
+
+    setContacts(list);
+    } finally {
+    setContactsLoading(false);
+    }
+    }, [userId]);
 
   useEffect(() => {
     if (!userId) {

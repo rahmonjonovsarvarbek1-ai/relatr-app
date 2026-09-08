@@ -11,7 +11,6 @@ interface AuthContextValue {
   session: Session | null;
   initializing: boolean;
   signInWithGoogle: () => Promise<{ error?: string }>;
-  // YANGI QO'SHILDI: Email bilan kirish va ro'yxatdan o'tish uchun tiplar
   signInWithEmail: (email: string, password: string) => Promise<{ error?: string }>;
   signUpWithEmail: (email: string, password: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
@@ -19,7 +18,6 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-// TUZATILGAN KOD:
 const redirectTo = AuthSession.makeRedirectUri({
   scheme: 'relatr',
   preferLocalhost: true,
@@ -46,7 +44,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signInWithGoogle = useCallback(async () => {
     try {
-      // Supabase Google Auth so'rovi
+      // Kick off the Supabase Google OAuth request.
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -59,14 +57,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { error: error?.message ?? 'Could not start Google sign-in.' };
       }
 
-      // In-app brauzerda auth oynasini ochish
+      // Open the auth flow in an in-app browser session.
       const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
 
       if (result.type !== 'success' || !result.url) {
         return {};
       }
 
-      // Supabase tokenlarini URL manzilidan ajratib olish
+      // Extract the Supabase tokens from the redirect URL.
       const parsed = Linking.parse(result.url.replace('#', '?'));
       const accessToken = parsed.queryParams?.access_token as string | undefined;
       const refreshToken = parsed.queryParams?.refresh_token as string | undefined;
@@ -87,7 +85,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  // YANGI QO'SHILDI: Email va parol orqali tizimga kirish (Login)
+  // Sign in with an existing email + password account.
   const signInWithEmail = useCallback(async (email: string, password: string) => {
     try {
       const { error } = await supabase.auth.signInWithPassword({
@@ -101,7 +99,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  // YANGI QO'SHILDI: Email va parol orqali ro'yxatdan o'tish (Register)
+  // Create a new account with email + password.
   const signUpWithEmail = useCallback(async (email: string, password: string) => {
     try {
       const { error, data } = await supabase.auth.signUp({
@@ -109,10 +107,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         password,
       });
       if (error) return { error: error.message };
-      
-      // Agar Supabase'da "Confirm Email" yoqilgan bo'lsa, sessiya darhol berilmaydi.
+
+      // If "Confirm Email" is enabled in Supabase, no session is returned yet.
       if (data.user && !data.session) {
-        return { error: "Pochtaga tasdiqlash xati yuborildi. Iltimos tekshiring." };
+        return { error: 'A confirmation email has been sent. Please check your inbox.' };
       }
       return {};
     } catch (e) {
@@ -120,27 +118,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  // TUZATILGAN signOut FUNKSIYASI:
   const signOut = useCallback(async () => {
     try {
       await supabase.auth.signOut();
     } catch (e) {
       console.error('SignOut error:', e);
     } finally {
-      // Supabase xato bergan bo'lsa ham UI'ni darhol Login ekraniga o'tkazish
+      // Move the UI back to the login screen immediately even if the
+      // Supabase call itself failed.
       setSession(null);
     }
   }, []);
 
   return (
-    <AuthContext.Provider 
-      value={{ 
-        session, 
-        initializing, 
-        signInWithGoogle, 
-        signInWithEmail, // YANGI QO'SHILDI
-        signUpWithEmail, // YANGI QO'SHILDI
-        signOut 
+    <AuthContext.Provider
+      value={{
+        session,
+        initializing,
+        signInWithGoogle,
+        signInWithEmail,
+        signUpWithEmail,
+        signOut,
       }}
     >
       {children}
@@ -153,7 +151,6 @@ export function useAuth() {
   if (!ctx) throw new Error('useAuth must be used within AuthProvider');
   return ctx;
 }
-
 
 export const authRedirectUri = redirectTo;
 

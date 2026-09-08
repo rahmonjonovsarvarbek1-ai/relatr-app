@@ -74,6 +74,7 @@ const emptyProfile = (id: string): UserProfile => ({
   activityStatus: true,
   blockedUserIds: [],
   mfaEnabled: false,
+  onboardingCompleted: false,
 });
 
 // MFA holatini Supabase Auth'dan olib kelish uchun kichik yordamchi.

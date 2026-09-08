@@ -66,12 +66,12 @@ interface NearbyProfile {
 
 const EARTH_RADIUS_KM = 6371;
 
-function toRad(deg: number) {
+function toRad(deg: number): number {
   return (deg * Math.PI) / 180;
 }
 
 // Haversine distance in km between two lat/lng points.
-function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
@@ -94,6 +94,23 @@ function boundingBox(lat: number, lng: number, radiusKm: number) {
   };
 }
 
+interface FriendshipRow {
+  user_id: string;
+  friend_id: string;
+  status: string;
+}
+
+interface ProfileCandidateRow {
+  id: string;
+  name: string;
+  username: string;
+  emoji: string | null;
+  avatar_color: string | null;
+  avatar_url: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
 const NearbySuggestions: React.FC<{
   onOpenProfile: (userId: string, preview?: Partial<NearbyProfile>) => void;
 }> = ({ onOpenProfile }) => {
@@ -107,6 +124,14 @@ const NearbySuggestions: React.FC<{
   const [nearby, setNearby] = useState<NearbyProfile[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
   const load = useCallback(async () => {
     if (!meId) return;
     setLoading(true);
@@ -117,6 +142,8 @@ const NearbySuggestions: React.FC<{
         .select('latitude, longitude')
         .eq('id', meId)
         .maybeSingle();
+
+      if (!isMountedRef.current) return;
 
       if (meError || !me || me.latitude == null || me.longitude == null) {
         // No location on file for the current user — nothing to
@@ -129,23 +156,26 @@ const NearbySuggestions: React.FC<{
       const RADIUS_KM = 50;
       const box = boundingBox(me.latitude, me.longitude, RADIUS_KM);
 
-      const [{ data: candidates, error: candError }, { data: friendRows }] = await Promise.all([
-        supabase
-          .from('profiles')
-          .select('id, name, username, emoji, avatar_color, avatar_url, latitude, longitude')
-          .neq('id', meId)
-          .gte('latitude', box.minLat)
-          .lte('latitude', box.maxLat)
-          .gte('longitude', box.minLng)
-          .lte('longitude', box.maxLng)
-          .limit(50),
-        supabase
-          .from('friendships')
-          .select('requester_id, friend_id, status')
-          .or(`requester_id.eq.${meId},friend_id.eq.${meId}`),
-      ]);
+      const [{ data: candidates, error: candError }, { data: friendRows, error: friendError }] =
+        await Promise.all([
+          supabase
+            .from('profiles')
+            .select('id, name, username, emoji, avatar_color, avatar_url, latitude, longitude')
+            .neq('id', meId)
+            .gte('latitude', box.minLat)
+            .lte('latitude', box.maxLat)
+            .gte('longitude', box.minLng)
+            .lte('longitude', box.maxLng)
+            .limit(50),
+          supabase
+            .from('friendships')
+            .select('user_id, friend_id, status')
+            .or(`user_id.eq.${meId},friend_id.eq.${meId}`),
+        ]);
 
-      if (candError) {
+      if (!isMountedRef.current) return;
+
+      if (candError || friendError) {
         setError('Could not load nearby people.');
         setNearby([]);
         setLoading(false);
@@ -156,28 +186,33 @@ const NearbySuggestions: React.FC<{
       // shouldn't clutter "nearby suggestions" — that's what the
       // Contacts flow on ProfileScreen is for.
       const excluded = new Set<string>();
-      (friendRows ?? []).forEach((f: any) => {
-        excluded.add(f.requester_id === meId ? f.friend_id : f.requester_id);
+      ((friendRows as FriendshipRow[]) ?? []).forEach((f) => {
+        excluded.add(f.user_id === meId ? f.friend_id : f.user_id);
       });
 
-      const withDistance: NearbyProfile[] = (candidates ?? [])
-        .filter((c: any) => c.latitude != null && c.longitude != null && !excluded.has(c.id))
-        .map((c: any) => ({
+      const withDistance: NearbyProfile[] = ((candidates as ProfileCandidateRow[]) ?? [])
+        .filter((c) => c.latitude != null && c.longitude != null && !excluded.has(c.id))
+        .map((c) => ({
           id: c.id,
           name: c.name,
           username: c.username,
           emoji: c.emoji ?? '🙂',
           avatarColor: c.avatar_color ?? colors.primary,
           avatarUrl: c.avatar_url ?? undefined,
-          distanceKm: haversineKm(me.latitude, me.longitude, c.latitude, c.longitude),
+          distanceKm: haversineKm(me.latitude as number, me.longitude as number, c.latitude as number, c.longitude as number),
         }))
         .filter((c) => c.distanceKm <= RADIUS_KM)
         .sort((a, b) => a.distanceKm - b.distanceKm)
         .slice(0, 15);
 
       setNearby(withDistance);
+    } catch (e) {
+      if (!isMountedRef.current) return;
+      console.error('NearbySuggestions load error:', e);
+      setError('Could not load nearby people.');
+      setNearby([]);
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) setLoading(false);
     }
   }, [meId, colors.primary]);
 
@@ -212,7 +247,12 @@ const NearbySuggestions: React.FC<{
           {loading ? (
             <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.sm }} />
           ) : error ? (
-            <Text style={styles.empty}>{error}</Text>
+            <View>
+              <Text style={styles.empty}>{error}</Text>
+              <TouchableOpacity onPress={load} style={styles.retryBtn}>
+                <Text style={styles.retryText}>Try Again</Text>
+              </TouchableOpacity>
+            </View>
           ) : nearby.length === 0 ? (
             <Text style={styles.empty}>No one nearby yet.</Text>
           ) : (
@@ -290,7 +330,7 @@ const DatesScreen: React.FC = () => {
       return;
     }
     setWorldError(null);
-    setWorldSpecialDays((data as WorldHolidayRow[] | null ?? []).map(worldSpecialDayFromRow));
+    setWorldSpecialDays(((data as WorldHolidayRow[] | null) ?? []).map(worldSpecialDayFromRow));
   }, []);
 
   const syncFromNager = useCallback(async (): Promise<void> => {
@@ -351,7 +391,7 @@ const DatesScreen: React.FC = () => {
       console.error('manual sync error:', e);
     }
     await fetchWorldHolidays();
-    setIsRefreshing(false);
+    if (isMountedRef.current) setIsRefreshing(false);
   }, [fetchWorldHolidays]);
 
   const friendUpcoming = useMemo<FriendUpcomingItem[]>(() => {
@@ -420,7 +460,16 @@ const DatesScreen: React.FC = () => {
   // via NearbySuggestions. Passing the preview fields avoids a flash of
   // "not connected" while ContactProfileScreen re-fetches fresh state.
   const goToContactProfile = useCallback(
-    (userId: string, preview?: { name?: string; username?: string; emoji?: string; avatarColor?: string; avatarUrl?: string }) => {
+    (
+      userId: string,
+      preview?: {
+        name?: string;
+        username?: string;
+        emoji?: string;
+        avatarColor?: string;
+        avatarUrl?: string;
+      },
+    ) => {
       navigation.navigate('ContactProfile', {
         userId,
         name: preview?.name,
@@ -625,143 +674,144 @@ const DatesScreen: React.FC = () => {
   );
 };
 
-const makeStyles = (colors: ColorScheme) => StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.bg },
-  scroll: { padding: spacing.lg },
-  header: { ...typography.h1, color: colors.text },
-  subheader: { ...typography.body, color: colors.textFaint, marginTop: 4 },
-  upcomingCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing.sm,
-  },
-  upcomingPhoto: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.cardAlt },
-  upcomingName: { ...typography.bodyBold, color: colors.text },
-  upcomingLabel: { ...typography.caption, color: colors.textFaint, marginTop: 2 },
-  badge: {
-    backgroundColor: colors.primary + '25',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
-    borderRadius: radius.pill,
-  },
-  badgeToday: { backgroundColor: colors.gold + '30' },
-  badgeText: { ...typography.small, color: colors.primary, fontWeight: '700' },
-  badgeTextToday: { color: colors.gold },
-  tabRow: {
-    flexDirection: 'row',
-    backgroundColor: colors.cardAlt,
-    borderRadius: radius.pill,
-    padding: 4,
-    marginTop: spacing.lg,
-    marginBottom: spacing.md,
-  },
-  tabBtn: {
-    flex: 1,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.pill,
-    alignItems: 'center',
-  },
-  tabBtnActive: { backgroundColor: colors.primary },
-  tabBtnText: { ...typography.caption, color: colors.textDim, fontWeight: '600' },
-  tabBtnTextActive: { color: colors.bg },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: spacing.sm + 2,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  rowPhoto: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.cardAlt },
-  rowTitle: { ...typography.bodyBold, color: colors.text },
-  rowSub: { ...typography.caption, color: colors.textFaint, marginTop: 2 },
-  rowDays: { ...typography.caption, color: colors.primary, fontWeight: '700' },
-  rowDaysToday: { color: colors.gold },
-  worldEmojiWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.cardAlt,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  searchWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.cardAlt,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: spacing.sm,
-  },
-  searchInput: {
-    flex: 1,
-    color: colors.text,
-    paddingVertical: spacing.sm,
-    paddingLeft: spacing.sm,
-    ...typography.body,
-  },
-  warning: {
-    ...typography.caption,
-    color: colors.gold,
-    marginBottom: spacing.sm,
-  },
-  empty: {
-    ...typography.body,
-    color: colors.textFaint,
-    marginTop: spacing.md,
-    textAlign: 'center',
-  },
-  emptyWrap: {
-    alignItems: 'center',
-    paddingVertical: spacing.xl,
-  },
-  emptyEmoji: { fontSize: 32, marginBottom: spacing.sm },
-  loaderWrap: {
-    paddingVertical: spacing.xl,
-    alignItems: 'center',
-  },
-  retryBtn: {
-    marginTop: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    backgroundColor: colors.primary,
-    borderRadius: radius.pill,
-  },
-  retryText: { ...typography.caption, color: colors.bg, fontWeight: '700' },
-  nearbyHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  nearbyToggleBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
-  },
-  nearbyToggleText: { ...typography.caption, color: colors.textDim, fontWeight: '600' },
-  nearbyCard: {
-    alignItems: 'center',
-    marginRight: spacing.md,
-    width: 72,
-  },
-  nearbyAvatarImage: { width: 52, height: 52, borderRadius: 26 },
-  nearbyName: {
-    ...typography.small,
-    color: colors.text,
-    marginTop: 6,
-    textAlign: 'center',
-    fontWeight: '600',
-  },
-  nearbyDistance: {
-    ...typography.small,
-    color: colors.textFaint,
-    marginTop: 1,
-    textAlign: 'center',
-  },
-});
+const makeStyles = (colors: ColorScheme) =>
+  StyleSheet.create({
+    safe: { flex: 1, backgroundColor: colors.bg },
+    scroll: { padding: spacing.lg },
+    header: { ...typography.h1, color: colors.text },
+    subheader: { ...typography.body, color: colors.textFaint, marginTop: 4 },
+    upcomingCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: spacing.sm,
+    },
+    upcomingPhoto: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.cardAlt },
+    upcomingName: { ...typography.bodyBold, color: colors.text },
+    upcomingLabel: { ...typography.caption, color: colors.textFaint, marginTop: 2 },
+    badge: {
+      backgroundColor: colors.primary + '25',
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 6,
+      borderRadius: radius.pill,
+    },
+    badgeToday: { backgroundColor: colors.gold + '30' },
+    badgeText: { ...typography.small, color: colors.primary, fontWeight: '700' },
+    badgeTextToday: { color: colors.gold },
+    tabRow: {
+      flexDirection: 'row',
+      backgroundColor: colors.cardAlt,
+      borderRadius: radius.pill,
+      padding: 4,
+      marginTop: spacing.lg,
+      marginBottom: spacing.md,
+    },
+    tabBtn: {
+      flex: 1,
+      paddingVertical: spacing.sm,
+      borderRadius: radius.pill,
+      alignItems: 'center',
+    },
+    tabBtnActive: { backgroundColor: colors.primary },
+    tabBtnText: { ...typography.caption, color: colors.textDim, fontWeight: '600' },
+    tabBtnTextActive: { color: colors.bg },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: spacing.sm + 2,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    rowPhoto: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.cardAlt },
+    rowTitle: { ...typography.bodyBold, color: colors.text },
+    rowSub: { ...typography.caption, color: colors.textFaint, marginTop: 2 },
+    rowDays: { ...typography.caption, color: colors.primary, fontWeight: '700' },
+    rowDaysToday: { color: colors.gold },
+    worldEmojiWrap: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.cardAlt,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    searchWrap: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.cardAlt,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: spacing.sm,
+    },
+    searchInput: {
+      flex: 1,
+      color: colors.text,
+      paddingVertical: spacing.sm,
+      paddingLeft: spacing.sm,
+      ...typography.body,
+    },
+    warning: {
+      ...typography.caption,
+      color: colors.gold,
+      marginBottom: spacing.sm,
+    },
+    empty: {
+      ...typography.body,
+      color: colors.textFaint,
+      marginTop: spacing.md,
+      textAlign: 'center',
+    },
+    emptyWrap: {
+      alignItems: 'center',
+      paddingVertical: spacing.xl,
+    },
+    emptyEmoji: { fontSize: 32, marginBottom: spacing.sm },
+    loaderWrap: {
+      paddingVertical: spacing.xl,
+      alignItems: 'center',
+    },
+    retryBtn: {
+      marginTop: spacing.sm,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.sm,
+      backgroundColor: colors.primary,
+      borderRadius: radius.pill,
+    },
+    retryText: { ...typography.caption, color: colors.bg, fontWeight: '700' },
+    nearbyHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    nearbyToggleBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 6,
+    },
+    nearbyToggleText: { ...typography.caption, color: colors.textDim, fontWeight: '600' },
+    nearbyCard: {
+      alignItems: 'center',
+      marginRight: spacing.md,
+      width: 72,
+    },
+    nearbyAvatarImage: { width: 52, height: 52, borderRadius: 26 },
+    nearbyName: {
+      ...typography.small,
+      color: colors.text,
+      marginTop: 6,
+      textAlign: 'center',
+      fontWeight: '600',
+    },
+    nearbyDistance: {
+      ...typography.small,
+      color: colors.textFaint,
+      marginTop: 1,
+      textAlign: 'center',
+    },
+  });
 
 export default DatesScreen;
 

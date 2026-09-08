@@ -186,10 +186,10 @@ const styles = StyleSheet.create({
     elevation: 14,
   },
   tintOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   innerBorder: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     borderRadius: 32,
     borderWidth: 1,
   },
@@ -213,7 +213,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   pillBorder: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     borderRadius: 24,
     borderWidth: 1,
   },

@@ -206,6 +206,7 @@ export const seedProfile: UserProfile = {
   activityStatus: true,
   blockedUserIds: [],
   mfaEnabled: false,
+  onboardingCompleted: false
 };
 
 export const worldSpecialDays: WorldSpecialDay[] = [

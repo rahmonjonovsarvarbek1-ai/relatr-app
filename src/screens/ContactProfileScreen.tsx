@@ -41,6 +41,17 @@ import type { StoryRow, FriendStoryGroup } from '../types/storyTypes';
 // "not connected" state. That said, the *real* fix belongs at the
 // call site — check every `navigation.navigate('ContactProfile', ...)`
 // and make sure `userId` is always a `profiles.id`.
+//
+// DUPLICATE-ROW NOTE: `friendships` can end up with more than one row
+// for the same pair of users (e.g. leftover rows from before a unique
+// constraint existed, or a race between two inserts). Any query that
+// expects exactly one friendship row therefore uses `.order(...)` +
+// picks the most recent row instead of `.maybeSingle()`, which throws
+// if more than one row comes back ("JSON object requested, multiple
+// (or no) rows returned"). The real fix is a DB-level unique
+// constraint on the pair, e.g.:
+//   CREATE UNIQUE INDEX friendships_unique_pair
+//   ON friendships (LEAST(user_id, friend_id), GREATEST(user_id, friend_id));
 // ---------------------------------------------------------------------
 type ContactProfileParams = {
   userId: string;
@@ -74,7 +85,7 @@ type Friendship = {
   isIncoming: boolean; // true if THEY sent it to me
 };
 
-// UUID v1-v5 shape check. `friendships.friend_id` / `requester_id` are
+// UUID v1-v5 shape check. `friendships.friend_id` / `user_id` are
 // uuid columns with a FK to `profiles(id)`, so anything that isn't a
 // well-formed UUID can never satisfy that constraint and is worth
 // catching client-side before we even hit Postgres.
@@ -155,10 +166,12 @@ const ContactProfileScreen: React.FC = () => {
 
       // Not a profiles.id — check whether it's actually a friendships.id
       // that got passed in by mistake, and recover the real profile id
-      // from that row.
+      // from that row. `friendships.id` is the table's own primary key,
+      // so this lookup can never return more than one row and
+      // `.maybeSingle()` is safe here.
       const { data: friendshipRow, error: friendshipLookupError } = await supabase
         .from('friendships')
-        .select('id, requester_id, friend_id')
+        .select('id, user_id, friend_id')
         .eq('id', rawUserId)
         .maybeSingle();
 
@@ -168,9 +181,9 @@ const ContactProfileScreen: React.FC = () => {
 
       if (friendshipRow) {
         const correctedId =
-          friendshipRow.requester_id === currentMeId
+          friendshipRow.user_id === currentMeId
             ? friendshipRow.friend_id
-            : friendshipRow.requester_id;
+            : friendshipRow.user_id;
         console.warn(
           '[ContactProfileScreen] params.userId was actually a friendships.id, not a profiles.id.',
           `Corrected ${rawUserId} -> ${correctedId}.`,
@@ -189,6 +202,11 @@ const ContactProfileScreen: React.FC = () => {
   // -----------------------------------------------------------------
   // Load the target profile + the friendship row between me and them
   // (checked from both directions, same as StoriesScreen's search).
+  //
+  // Uses `.order()` + picks the newest row instead of `.maybeSingle()`
+  // for the friendship lookup, because `friendships` can (until a DB
+  // unique constraint exists) hold more than one row for the same
+  // pair — `.maybeSingle()` throws in that case.
   // -----------------------------------------------------------------
   const load = useCallback(async () => {
     if (!meId || !isValidUuid(params?.userId)) {
@@ -226,7 +244,7 @@ const ContactProfileScreen: React.FC = () => {
 
       setTargetUserId(resolvedId);
 
-      const [{ data: profileRow, error: profileError }, { data: friendshipRow, error: friendshipError }] =
+      const [{ data: profileRow, error: profileError }, { data: friendshipRows, error: friendshipError }] =
         await Promise.all([
           supabase
             .from('profiles')
@@ -237,11 +255,11 @@ const ContactProfileScreen: React.FC = () => {
             .maybeSingle(),
           supabase
             .from('friendships')
-            .select('id, requester_id, friend_id, status')
+            .select('id, user_id, friend_id, status, created_at')
             .or(
-              `and(requester_id.eq.${meId},friend_id.eq.${resolvedId}),and(requester_id.eq.${resolvedId},friend_id.eq.${meId})`
+              `and(user_id.eq.${meId},friend_id.eq.${resolvedId}),and(user_id.eq.${resolvedId},friend_id.eq.${meId})`
             )
-            .maybeSingle(),
+            .order('created_at', { ascending: false }),
         ]);
 
       if (profileError) {
@@ -250,6 +268,10 @@ const ContactProfileScreen: React.FC = () => {
       if (friendshipError) {
         console.error('ContactProfile load (friendship) error:', friendshipError.message);
       }
+
+      // If duplicate rows exist for this pair, use the most recent one.
+      const friendshipRow =
+        friendshipRows && friendshipRows.length > 0 ? friendshipRows[0] : null;
 
       if (profileRow) {
         setProfile({
@@ -345,7 +367,7 @@ const ContactProfileScreen: React.FC = () => {
   // -----------------------------------------------------------------
   // Confirms a row with the given id actually exists in `profiles`
   // before we let a friendships insert/update reference it. A 23503 on
-  // friend_id/requester_id means Postgres rejected exactly this — doing
+  // friend_id/user_id means Postgres rejected exactly this — doing
   // the check client-side lets us show the user (and yourself, via the
   // console) which id is the problem instead of a bare Postgres code.
   const ensureProfileExists = async (userId: string, label: string): Promise<boolean> => {
@@ -357,7 +379,7 @@ const ContactProfileScreen: React.FC = () => {
 
     if (error) {
       console.error(`ensureProfileExists(${label}) error:`, error.code, error.message);
-      Alert.alert('Xatolik', `${label} profilini tekshirishda xatolik yuz berdi: ${error.message}`);
+      Alert.alert('Error', `Something went wrong while checking the ${label.toLowerCase()} profile: ${error.message}`);
       return false;
     }
     if (!data) {
@@ -365,12 +387,12 @@ const ContactProfileScreen: React.FC = () => {
       // on `profiles` is hiding it from the current user — both look
       // identical from here and both will trigger 23503 downstream.
       console.error(
-        `ensureProfileExists(${label}): profiles jadvalida id=${userId} topilmadi (yoki RLS uni yashiryapti).`
+        `ensureProfileExists(${label}): no matching row found in profiles for id=${userId} (or it's hidden by RLS).`
       );
       Alert.alert(
-        'Profil topilmadi',
-        `${label} uchun profiles jadvalida mos yozuv topilmadi (ID: ${userId}). ` +
-          'Foreign key xatosi (23503) aynan shu sabab bilan yuzaga kelmoqda.'
+        'Profile not found',
+        `No matching row was found in profiles for the ${label.toLowerCase()} (ID: ${userId}). ` +
+          'This is exactly what causes the foreign key error (23503).'
       );
       return false;
     }
@@ -379,7 +401,7 @@ const ContactProfileScreen: React.FC = () => {
 
   // Sends (or re-sends) a friend request between meId and targetUserId.
   //
-  // NOTE: `friendships` has a UNIQUE(requester_id, friend_id) constraint,
+  // NOTE: `friendships` has a UNIQUE(user_id, friend_id) constraint,
   // which is direction-sensitive. If a row already exists in EITHER
   // direction (e.g. a previous request was declined, or they had already
   // requested me before I looked), a plain `insert` here can violate that
@@ -390,25 +412,27 @@ const ContactProfileScreen: React.FC = () => {
   //   0) Validate meId/targetUserId are well-formed UUIDs and that both
   //      correspond to real `profiles` rows (this is what 23503 checks
   //      at the DB level — we check it first so the failure is clear).
-  //   1) Re-check for an existing row right before writing (covers races
-  //      where `friendship` state is stale).
-  //   2) If a row exists, UPDATE it back to 'pending' (reusing the same
-  //      row/id) instead of inserting a duplicate.
+  //   1) Re-check for any existing row(s) right before writing (covers
+  //      races where `friendship` state is stale, and tolerates
+  //      duplicate rows if a unique constraint hasn't been added yet).
+  //   2) If a row exists, UPDATE the most recent one back to 'pending'
+  //      (reusing the same row/id) instead of inserting a duplicate,
+  //      and clean up any stale duplicate rows found alongside it.
   //   3) If no row exists, INSERT a fresh one.
   //   4) On any Supabase error, surface the real code/message so future
   //      failures are actionable instead of a generic alert.
   const sendRequest = async () => {
     if (!meId) {
-      Alert.alert('Xatolik', 'Sessiya topilmadi. Iltimos, qaytadan tizimga kiring.');
+      Alert.alert('Error', 'Session not found. Please sign in again.');
       return;
     }
     if (!isValidUuid(targetUserId)) {
       console.error('sendRequest: targetUserId is missing or not a valid UUID:', targetUserId);
-      Alert.alert('Xatolik', "Foydalanuvchi ID topilmadi yoki noto'g'ri formatda.");
+      Alert.alert('Error', 'User ID not found or has an invalid format.');
       return;
     }
     if (meId === targetUserId) {
-      Alert.alert('Xatolik', "O'zingizga do'stlik so'rovi yubora olmaysiz.");
+      Alert.alert('Error', "You can't send a friend request to yourself.");
       return;
     }
 
@@ -416,25 +440,37 @@ const ContactProfileScreen: React.FC = () => {
     try {
       // Client-side pre-check for exactly the condition that causes
       // Postgres error 23503 on friendships_friend_id_fkey /
-      // friendships_requester_id_fkey.
-      const targetOk = await ensureProfileExists(targetUserId, 'Maqsadli foydalanuvchi');
+      // friendships_user_id_fkey.
+      const targetOk = await ensureProfileExists(targetUserId, 'Target user');
       if (!targetOk) return;
 
-      const meOk = await ensureProfileExists(meId, 'Sizning');
+      const meOk = await ensureProfileExists(meId, 'Your');
       if (!meOk) return;
 
-      const { data: existing, error: existingError } = await supabase
+      const { data: existingRows, error: existingError } = await supabase
         .from('friendships')
-        .select('id, status, requester_id, friend_id')
+        .select('id, status, user_id, friend_id, created_at')
         .or(
-          `and(requester_id.eq.${meId},friend_id.eq.${targetUserId}),and(requester_id.eq.${targetUserId},friend_id.eq.${meId})`
+          `and(user_id.eq.${meId},friend_id.eq.${targetUserId}),and(user_id.eq.${targetUserId},friend_id.eq.${meId})`
         )
-        .maybeSingle();
+        .order('created_at', { ascending: false });
 
       if (existingError) {
         console.error('sendRequest lookup error:', existingError.code, existingError.message);
-        Alert.alert('Xatolik', `${existingError.message}${existingError.code ? ` (${existingError.code})` : ''}`);
+        Alert.alert('Error', `${existingError.message}${existingError.code ? ` (${existingError.code})` : ''}`);
         return;
+      }
+
+      // If multiple duplicate rows exist for this pair, use the most
+      // recent one and clean up the rest.
+      const existing = existingRows && existingRows.length > 0 ? existingRows[0] : null;
+
+      if (existingRows && existingRows.length > 1) {
+        const staleIds = existingRows.slice(1).map((r) => r.id);
+        const { error: cleanupError } = await supabase.from('friendships').delete().in('id', staleIds);
+        if (cleanupError) {
+          console.error('sendRequest cleanup of duplicate rows failed:', cleanupError.message);
+        }
       }
 
       let error;
@@ -444,14 +480,14 @@ const ContactProfileScreen: React.FC = () => {
         ({ error } = await supabase
           .from('friendships')
           .update({
-            requester_id: meId,
+            user_id: meId,
             friend_id: targetUserId,
             status: 'pending',
           })
           .eq('id', existing.id));
       } else {
         ({ error } = await supabase.from('friendships').insert({
-          requester_id: meId,
+          user_id: meId,
           friend_id: targetUserId,
           status: 'pending',
         }));
@@ -464,12 +500,12 @@ const ContactProfileScreen: React.FC = () => {
           // can still happen on a race (the profile row was deleted
           // between the check and the write).
           Alert.alert(
-            "Bog'lanish xatosi (23503)",
-            "friendships.friend_id yoki requester_id qiymati profiles jadvalida mavjud emas. " +
-              "Ushbu javob bilan birga berilgan SQL diagnostika skriptini ishga tushiring."
+            'Foreign key error (23503)',
+            'friendships.friend_id or user_id references a value that does not exist in profiles. ' +
+              'Run the SQL diagnostic script provided alongside this fix.'
           );
         } else {
-          Alert.alert('Xatolik', `${error.message}${error.code ? ` (${error.code})` : ''}`);
+          Alert.alert('Error', `${error.message}${error.code ? ` (${error.code})` : ''}`);
         }
         return;
       }

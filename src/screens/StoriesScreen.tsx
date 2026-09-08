@@ -878,15 +878,15 @@ const SearchModal: React.FC<{
           .limit(20),
         supabase
           .from('friendships')
-          .select('requester_id, friend_id, status')
-          .or(`requester_id.eq.${currentUserId ?? ''},friend_id.eq.${currentUserId ?? ''}`)
+          .select('user_id, friend_id, status')
+          .or(`user_id.eq.${currentUserId ?? ''},friend_id.eq.${currentUserId ?? ''}`)
           .eq('status', 'accepted'),
       ]);
 
       if (asRequester.data) {
         const friendIds = new Set<string>(
           (asTarget.data ?? []).map((f: any) =>
-            f.requester_id === currentUserId ? f.friend_id : f.requester_id
+            f.user_id === currentUserId ? f.friend_id : f.user_id
           )
         );
         setResults(
@@ -913,7 +913,7 @@ const SearchModal: React.FC<{
   const sendFriendRequest = async (targetId: string) => {
     if (!currentUserId) return;
     const { error } = await supabase.from('friendships').insert({
-      requester_id: currentUserId,
+      user_id: currentUserId,
       friend_id: targetId,
       status: 'pending',
     });

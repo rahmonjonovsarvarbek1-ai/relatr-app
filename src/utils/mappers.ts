@@ -241,6 +241,10 @@ export function profileFromRow(row: ProfileRow): UserProfile {
     blockedUserIds: row.blocked_user_ids ?? [],
     mfaEnabled: false, // populated separately from supabase.auth.mfa
     // --------------------------------------
+
+    // ---------------- NEW: onboarding ----------------
+    onboardingCompleted: row.onboarding_completed ?? false,
+    // --------------------------------------
   };
 }
 
@@ -269,6 +273,11 @@ export function profileUpdatesToRow(updates: Partial<UserProfile>) {
   if (updates.activityStatus !== undefined) row.activity_status = updates.activityStatus;
   if (updates.blockedUserIds !== undefined) row.blocked_user_ids = updates.blockedUserIds;
   // mfaEnabled is never written here — it's managed via supabase.auth.mfa.*
+  // --------------------------------------
+
+  // ---------------- NEW: onboarding ----------------
+  if (updates.onboardingCompleted !== undefined)
+    row.onboarding_completed = updates.onboardingCompleted;
   // --------------------------------------
   return row;
 }
