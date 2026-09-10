@@ -30,6 +30,8 @@ import {
   Trash2,
   BookmarkPlus,
   ChevronRight,
+  X,
+  Play,
 } from 'lucide-react-native';
 import { useApp } from '../context/AppContext';
 import { useTheme } from '../context/ThemeContext';
@@ -41,6 +43,7 @@ import { SectionHeader } from '../components/Card';
 import { supabase } from '../utils/supabase';
 import StoryViewerModal from './StoryViewerModal';
 import StoryComposerModal from './StoryComposerModal';
+import { useConnectedFriends } from '../hooks/useConnectedFriends';
 import {
   HIGHLIGHT_TITLES,
   type FriendStoryGroup,
@@ -84,7 +87,7 @@ const timeAgo = (iso?: string | null): string => {
 // ---------------------------------------------------------------------
 
 const StoriesScreen: React.FC = () => {
-  const { friends, refreshFriends } = useApp() as any;
+  const { friends, refresh: refreshFriends } = useConnectedFriends();
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const { width: SCREEN_W, height: SCREEN_H } = useWindowDimensions();
@@ -93,6 +96,7 @@ const StoriesScreen: React.FC = () => {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [myStories, setMyStories] = useState<StoryRow[]>([]);
   const [friendStories, setFriendStories] = useState<StoryRow[]>([]);
+  const [expiredMyStories, setExpiredMyStories] = useState<StoryRow[]>([]);
   const [highlights, setHighlights] = useState<HighlightGroup[]>([]);
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [viewedIds, setViewedIds] = useState<Set<string>>(new Set());
@@ -104,6 +108,8 @@ const StoriesScreen: React.FC = () => {
   const [activeHighlight, setActiveHighlight] = useState<HighlightGroup | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [browseFriendsOpen, setBrowseFriendsOpen] = useState(false);
+  const [addHighlightOpen, setAddHighlightOpen] = useState(false);
   const [composerUri, setComposerUri] = useState<string | null>(null);
   const [composerType, setComposerType] = useState<'image' | 'video'>('image');
 
@@ -175,6 +181,23 @@ const StoriesScreen: React.FC = () => {
     setMyStories(mine);
     setFriendStories(others);
     setLoading(false);
+  }, [currentUserId]);
+
+  // Expired (24h+) stories of mine that are NOT already saved as a
+  // highlight — these are the candidates offered in the "Add to
+  // highlights" picker, same as Instagram's "Archive" source list.
+  const loadExpiredMyStories = useCallback(async () => {
+    if (!currentUserId) return;
+    const { data, error } = await supabase
+      .from('stories')
+      .select('*')
+      .eq('owner_id', currentUserId)
+      .eq('is_highlight', false)
+      .lte('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false })
+      .limit(60);
+    if (error || !data) return;
+    setExpiredMyStories(data as StoryRow[]);
   }, [currentUserId]);
 
   const loadHighlights = useCallback(async () => {
@@ -265,12 +288,14 @@ const StoriesScreen: React.FC = () => {
     loadViewedIds();
     loadHighlights();
     loadNotifications();
+    loadExpiredMyStories();
 
     const channel = supabase
       .channel('stories-feed')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stories' }, () => {
         loadStories();
         loadHighlights();
+        loadExpiredMyStories();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'story_likes' }, () => {
         loadStories();
@@ -289,7 +314,7 @@ const StoriesScreen: React.FC = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [loadStories, loadViewedIds, loadHighlights, loadNotifications, refreshFriends]);
+  }, [loadStories, loadViewedIds, loadHighlights, loadNotifications, loadExpiredMyStories, refreshFriends]);
 
   const groups: FriendStoryGroup[] = useMemo(() => {
     const byFriend = new Map<string, StoryRow[]>();
@@ -355,9 +380,18 @@ const StoriesScreen: React.FC = () => {
     if (!currentUserId) return;
     setUploading(true);
     try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+      if (userError || !user) {
+        throw new Error('Session topilmadi, qayta login qiling.');
+      }
+      const ownerId = user.id;
+
       const caption = payload.caption ?? '';
       const fileExt = uri.split('.').pop() ?? (mediaType === 'video' ? 'mp4' : 'jpg');
-      const fileName = `${currentUserId}/${Date.now()}.${fileExt}`;
+      const fileName = `${ownerId}/${Date.now()}.${fileExt}`;
 
       const file = new FileSystem.File(uri);
       const base64 = await file.base64();
@@ -377,7 +411,7 @@ const StoriesScreen: React.FC = () => {
         .from('stories')
         .insert([
           {
-            owner_id: currentUserId,
+            owner_id: ownerId,
             media_url: publicUrlData.publicUrl,
             media_type: mediaType,
             caption: caption.trim() ? caption.trim() : null,
@@ -392,7 +426,10 @@ const StoriesScreen: React.FC = () => {
         .select('id')
         .single();
 
-      if (insertError) throw insertError;
+      if (insertError) {
+        console.error('insertError full:', JSON.stringify(insertError));
+        throw insertError;
+      }
 
       if (inserted && payload.mentionStickers.length > 0) {
         await supabase.from('story_mentions').insert(
@@ -404,11 +441,10 @@ const StoriesScreen: React.FC = () => {
           }))
         );
       }
-
-      setComposerUri(null);
-      loadStories();
     } catch (err) {
-      Alert.alert('Error', 'Something went wrong while uploading your story. Please try again.');
+      console.error('Story upload error:', err);
+      const message = err instanceof Error ? err.message : JSON.stringify(err);
+      Alert.alert('Error', `Upload failed: ${message}`);
     } finally {
       setUploading(false);
     }
@@ -486,6 +522,7 @@ const StoriesScreen: React.FC = () => {
   const addToHighlight = useCallback(
     async (story: StoryRow, title: string) => {
       if (!currentUserId) return;
+
       const { data, error } = await supabase
         .from('stories')
         .insert({
@@ -505,7 +542,7 @@ const StoriesScreen: React.FC = () => {
         .single();
 
       if (error || !data) {
-        console.error('addToHighlight error:', error?.code, error?.message);
+        console.error('addToHighlight error full:', JSON.stringify(error, null, 2));
         Alert.alert('Error', 'Could not save to highlights.');
         return;
       }
@@ -525,8 +562,9 @@ const StoriesScreen: React.FC = () => {
       }
       loadStories();
       loadHighlights();
+      loadExpiredMyStories();
     },
-    [loadStories, loadHighlights]
+    [loadStories, loadHighlights, loadExpiredMyStories]
   );
 
   return (
@@ -571,7 +609,11 @@ const StoriesScreen: React.FC = () => {
           </View>
         </View>
 
-        <SectionLabel icon={<Users size={13} color={colors.textDim} strokeWidth={2.2} />} title="Friends" />
+        <SectionLabel
+          icon={<Users size={13} color={colors.textDim} strokeWidth={2.2} />}
+          title="Friends"
+          onMorePress={() => setBrowseFriendsOpen(true)}
+        />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.rowScroll}>
           {loading && <ActivityIndicator style={{ marginLeft: spacing.lg }} color={colors.primary} />}
 
@@ -582,43 +624,59 @@ const StoriesScreen: React.FC = () => {
           {groups.map((g) => (
             <TouchableOpacity
               key={g.friendId}
-              style={styles.storyBubble}
+              style={styles.storyCard}
               onPress={() => setActiveGroup(g)}
-              activeOpacity={0.8}
+              activeOpacity={0.85}
             >
               <View
-                style={[styles.ring, { borderColor: g.allViewed ? colors.border : colors.primary }]}
+                style={[
+                  styles.storyCardFrame,
+                  { borderColor: g.allViewed ? colors.border : colors.primary },
+                ]}
               >
                 {g.avatarUrl ? (
-                  <Image source={{ uri: g.avatarUrl }} style={styles.bubbleThumb} />
+                  <Image source={{ uri: g.avatarUrl }} style={styles.storyCardImage} />
                 ) : (
-                  <Avatar emoji={g.emoji} color={g.color} size={58} />
+                  <View style={[styles.storyCardImage, styles.storyCardAvatarFill]}>
+                    <Avatar emoji={g.emoji} color={g.color} size={56} />
+                  </View>
                 )}
+                <View style={styles.storyCardGradient} />
+                {g.stories.length > 1 && (
+                  <View style={styles.storyCardCountBadge}>
+                    <Text style={styles.storyCardCountText}>{g.stories.length}</Text>
+                  </View>
+                )}
+                <View style={styles.storyCardAvatarChip}>
+                  {g.avatarUrl ? (
+                    <Image source={{ uri: g.avatarUrl }} style={styles.storyCardAvatarChipImage} />
+                  ) : (
+                    <Avatar emoji={g.emoji} color={g.color} size={26} />
+                  )}
+                </View>
+                <Text style={styles.storyCardName} numberOfLines={1}>
+                  {g.friendName}
+                </Text>
               </View>
-              <Text style={styles.storyName} numberOfLines={1}>
-                {g.friendName}
-              </Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
 
         <SectionLabel title="My story" />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.rowScroll}>
-          <TouchableOpacity style={styles.storyBubble} onPress={handlePickMedia} activeOpacity={0.8}>
-            <View style={[styles.ring, styles.addRing]}>
+          <TouchableOpacity style={styles.storyCard} onPress={handlePickMedia} activeOpacity={0.85}>
+            <View style={[styles.storyCardFrame, styles.addCardFrame]}>
               {uploading ? (
                 <ActivityIndicator size="small" color={colors.primary} />
               ) : (
-                <Plus size={26} color={colors.primary} strokeWidth={2.5} />
+                <Plus size={28} color={colors.primary} strokeWidth={2.5} />
               )}
+              <Text style={styles.addCardText}>Add to story</Text>
             </View>
-            <Text style={styles.storyName} numberOfLines={1}>
-              Add
-            </Text>
           </TouchableOpacity>
 
           {myStories.map((s, i) => (
-            <MyStoryBubble
+            <MyStoryCard
               key={s.id}
               story={s}
               index={i}
@@ -643,10 +701,21 @@ const StoriesScreen: React.FC = () => {
         <SectionLabel icon={<Star size={13} color={colors.textDim} strokeWidth={2.2} />} title="Highlights" />
         {highlightsLoading ? (
           <ActivityIndicator style={{ marginTop: spacing.sm }} color={colors.primary} />
-        ) : highlights.length === 0 ? (
-          <Text style={styles.emptyRowText}>Save your best stories here to keep them forever</Text>
         ) : (
           <View style={styles.highlightGrid}>
+            <TouchableOpacity
+              style={styles.highlightCard}
+              onPress={() => setAddHighlightOpen(true)}
+              activeOpacity={0.85}
+            >
+              <View style={[styles.highlightCardImage, styles.highlightAddFill]}>
+                <Plus size={22} color={colors.primary} strokeWidth={2.5} />
+              </View>
+              <Text style={styles.highlightAddTitle} numberOfLines={1}>
+                New
+              </Text>
+            </TouchableOpacity>
+
             {highlights.map((h) => (
               <TouchableOpacity
                 key={h.id}
@@ -661,6 +730,12 @@ const StoriesScreen: React.FC = () => {
                 </Text>
               </TouchableOpacity>
             ))}
+
+            {highlights.length === 0 && (
+              <View style={styles.highlightEmptyHint}>
+                <Text style={styles.emptyRowText}>Save your best stories here to keep them forever</Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -680,8 +755,6 @@ const StoriesScreen: React.FC = () => {
           onClose={() => setActiveGroup(null)}
           onViewed={markViewed}
           onToggleLike={toggleLike}
-          screenW={SCREEN_W}
-          screenH={SCREEN_H}
         />
       )}
 
@@ -700,8 +773,6 @@ const StoriesScreen: React.FC = () => {
           onClose={() => setActiveHighlight(null)}
           onViewed={() => {}}
           onToggleLike={toggleLike}
-          screenW={SCREEN_W}
-          screenH={SCREEN_H}
         />
       )}
 
@@ -712,10 +783,28 @@ const StoriesScreen: React.FC = () => {
           uploading={uploading}
           onCancel={() => setComposerUri(null)}
           onPublish={(payload) => handlePublishStory(composerUri, composerType, payload)}
-          screenW={SCREEN_W}
-          screenH={SCREEN_H}
         />
       )}
+
+      <BrowseFriendsModal
+        visible={browseFriendsOpen}
+        onClose={() => setBrowseFriendsOpen(false)}
+        groups={groups}
+        onOpenGroup={(g) => {
+          setBrowseFriendsOpen(false);
+          setActiveGroup(g);
+        }}
+      />
+
+      <AddHighlightModal
+        visible={addHighlightOpen}
+        onClose={() => setAddHighlightOpen(false)}
+        candidates={expiredMyStories}
+        onConfirm={async (story, title) => {
+          await addToHighlight(story, title);
+          setAddHighlightOpen(false);
+        }}
+      />
 
       <SearchModal
         visible={searchOpen}
@@ -752,7 +841,11 @@ const StoriesScreen: React.FC = () => {
   );
 };
 
-const SectionLabel: React.FC<{ title: string; icon?: React.ReactNode }> = ({ title, icon }) => {
+const SectionLabel: React.FC<{ title: string; icon?: React.ReactNode; onMorePress?: () => void }> = ({
+  title,
+  icon,
+  onMorePress,
+}) => {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   return (
@@ -761,7 +854,7 @@ const SectionLabel: React.FC<{ title: string; icon?: React.ReactNode }> = ({ tit
         {icon}
         <Text style={styles.sectionLabel}>{title}</Text>
       </View>
-      <TouchableOpacity style={styles.sectionMoreBtn} activeOpacity={0.6}>
+      <TouchableOpacity style={styles.sectionMoreBtn} activeOpacity={0.6} onPress={onMorePress}>
         <Text style={styles.sectionMoreText}>More</Text>
         <ChevronRight size={13} color={colors.textFaint} strokeWidth={2.2} />
       </TouchableOpacity>
@@ -770,10 +863,10 @@ const SectionLabel: React.FC<{ title: string; icon?: React.ReactNode }> = ({ tit
 };
 
 // ---------------------------------------------------------------------
-// My-story bubble with a 3-dot menu: save to highlight / delete
+// My-story card (9:16) with a 3-dot menu: save to highlight / delete
 // ---------------------------------------------------------------------
 
-const MyStoryBubble: React.FC<{
+const MyStoryCard: React.FC<{
   story: StoryRow;
   index: number;
   onPress: () => void;
@@ -797,10 +890,14 @@ const MyStoryBubble: React.FC<{
   };
 
   return (
-    <View style={styles.storyBubble}>
-      <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
-        <View style={[styles.ring, { borderColor: colors.primary }]}>
-          <Image source={{ uri: story.media_url }} style={styles.bubbleThumb} />
+    <View style={styles.storyCard}>
+      <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
+        <View style={[styles.storyCardFrame, { borderColor: colors.primary }]}>
+          <Image source={{ uri: story.media_url }} style={styles.storyCardImage} />
+          <View style={styles.storyCardGradient} />
+          <Text style={styles.storyCardName} numberOfLines={1}>
+            {index === 0 ? 'My story' : `Story ${index + 1}`}
+          </Text>
         </View>
       </TouchableOpacity>
 
@@ -811,10 +908,6 @@ const MyStoryBubble: React.FC<{
           <MoreHorizontal size={14} color={colors.bg} strokeWidth={2.5} />
         )}
       </TouchableOpacity>
-
-      <Text style={styles.storyName} numberOfLines={1}>
-        {index === 0 ? 'My story' : `Story ${index + 1}`}
-      </Text>
 
       <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
         <TouchableOpacity style={styles.menuBackdrop} activeOpacity={1} onPress={() => setMenuOpen(false)}>
@@ -873,6 +966,204 @@ const MyStoryBubble: React.FC<{
         </TouchableOpacity>
       </Modal>
     </View>
+  );
+};
+
+// ---------------------------------------------------------------------
+// Browse-friends modal — full screen, Instagram-Explore style grid of
+// tall 9:16 cards, one per friend group. Opened from the "Friends"
+// section's "More" link. Tapping a card opens that friend's stories
+// in the normal StoryViewerModal (same as tapping the row bubble).
+// ---------------------------------------------------------------------
+
+const BrowseFriendsModal: React.FC<{
+  visible: boolean;
+  onClose: () => void;
+  groups: FriendStoryGroup[];
+  onOpenGroup: (g: FriendStoryGroup) => void;
+}> = ({ visible, onClose, groups, onOpenGroup }) => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeaderRow}>
+            <Text style={styles.modalTitle}>Friends' stories</Text>
+            <TouchableOpacity onPress={onClose} style={styles.modalCloseBtn}>
+              <Text style={styles.modalCloseText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+
+          <FlatList
+            data={groups}
+            key="browse-grid-2col"
+            keyExtractor={(item) => item.friendId}
+            numColumns={2}
+            columnWrapperStyle={{ gap: spacing.sm, paddingHorizontal: spacing.lg }}
+            contentContainerStyle={{ paddingTop: spacing.sm, paddingBottom: spacing.xl, gap: spacing.sm }}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.browseCard}
+                activeOpacity={0.85}
+                onPress={() => onOpenGroup(item)}
+              >
+                {item.avatarUrl || item.stories[0]?.media_url ? (
+                  <Image
+                    source={{ uri: item.stories[0]?.media_url ?? item.avatarUrl! }}
+                    style={styles.browseCardImage}
+                  />
+                ) : (
+                  <View style={[styles.browseCardImage, styles.storyCardAvatarFill]}>
+                    <Avatar emoji={item.emoji} color={item.color} size={64} />
+                  </View>
+                )}
+                <View style={styles.browseCardGradient} />
+                {item.stories[0]?.media_type === 'video' && (
+                  <View style={styles.browseVideoBadge}>
+                    <Play size={12} color="#fff" fill="#fff" />
+                  </View>
+                )}
+                <View style={styles.browseCardFooter}>
+                  <View
+                    style={[
+                      styles.browseCardAvatarRing,
+                      { borderColor: item.allViewed ? 'rgba(255,255,255,0.4)' : colors.primary },
+                    ]}
+                  >
+                    {item.avatarUrl ? (
+                      <Image source={{ uri: item.avatarUrl }} style={styles.browseCardAvatarImage} />
+                    ) : (
+                      <Avatar emoji={item.emoji} color={item.color} size={24} />
+                    )}
+                  </View>
+                  <Text style={styles.browseCardName} numberOfLines={1}>
+                    {item.friendName}
+                  </Text>
+                </View>
+                {item.stories.length > 1 && (
+                  <View style={styles.storyCardCountBadge}>
+                    <Text style={styles.storyCardCountText}>{item.stories.length}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={
+              <Text style={[styles.emptyRowText, { paddingHorizontal: spacing.lg }]}>
+                None of your friends have posted a story yet
+              </Text>
+            }
+          />
+        </SafeAreaView>
+      </SafeAreaProvider>
+    </Modal>
+  );
+};
+
+// ---------------------------------------------------------------------
+// Add-highlight modal — pick one of your expired (archived) stories,
+// then pick a highlight title to file it under. Two-step sheet,
+// mirrors Instagram's "New highlight" flow but scoped to the fixed
+// HIGHLIGHT_TITLES list already used elsewhere in this screen.
+// ---------------------------------------------------------------------
+
+const AddHighlightModal: React.FC<{
+  visible: boolean;
+  onClose: () => void;
+  candidates: StoryRow[];
+  onConfirm: (story: StoryRow, title: string) => Promise<void>;
+}> = ({ visible, onClose, candidates, onConfirm }) => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+  const [selectedStory, setSelectedStory] = useState<StoryRow | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!visible) setSelectedStory(null);
+  }, [visible]);
+
+  const handlePickTitle = async (title: string) => {
+    if (!selectedStory) return;
+    setSaving(true);
+    try {
+      await onConfirm(selectedStory, title);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeaderRow}>
+            {selectedStory ? (
+              <TouchableOpacity onPress={() => setSelectedStory(null)} style={styles.modalCloseBtn}>
+                <Text style={styles.modalCloseText}>Back</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.modalTitle}>New highlight</Text>
+            )}
+            {selectedStory && <Text style={styles.modalTitle}>Choose title</Text>}
+            <TouchableOpacity onPress={onClose} style={styles.modalCloseBtn}>
+              <Text style={styles.modalCloseText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+
+          {!selectedStory ? (
+            <>
+              <Text style={styles.modalHint}>Pick one of your past stories to save.</Text>
+              <FlatList
+                data={candidates}
+                keyExtractor={(item) => item.id}
+                numColumns={3}
+                columnWrapperStyle={{ gap: spacing.xs, paddingHorizontal: spacing.lg }}
+                contentContainerStyle={{ paddingTop: spacing.sm, paddingBottom: spacing.xl, gap: spacing.xs }}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.pickerThumb}
+                    activeOpacity={0.85}
+                    onPress={() => setSelectedStory(item)}
+                  >
+                    <Image source={{ uri: item.media_url }} style={styles.pickerThumbImage} />
+                    {item.media_type === 'video' && (
+                      <View style={styles.browseVideoBadge}>
+                        <Play size={11} color="#fff" fill="#fff" />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                )}
+                ListEmptyComponent={
+                  <Text style={[styles.emptyRowText, { paddingHorizontal: spacing.lg }]}>
+                    No past stories yet. Once a story expires, it'll show up here to save as a highlight.
+                  </Text>
+                }
+              />
+            </>
+          ) : (
+            <View style={{ padding: spacing.lg }}>
+              <View style={styles.selectedPreviewRow}>
+                <Image source={{ uri: selectedStory.media_url }} style={styles.selectedPreviewImage} />
+                <Text style={styles.modalHint}>Choose which highlight to add this story to.</Text>
+              </View>
+              {HIGHLIGHT_TITLES.map((title: string) => (
+                <TouchableOpacity
+                  key={title}
+                  style={styles.menuItem}
+                  onPress={() => handlePickTitle(title)}
+                  disabled={saving}
+                >
+                  <Star size={16} color={colors.primary} strokeWidth={2} />
+                  <Text style={styles.menuItemText}>{title}</Text>
+                  {saving && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 'auto' }} />}
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </SafeAreaView>
+      </SafeAreaProvider>
+    </Modal>
   );
 };
 
@@ -1189,275 +1480,433 @@ const NotificationsModal: React.FC<{
 // Styles
 // ---------------------------------------------------------------------
 
-const makeStyles = (colors: ColorScheme) => StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.bg },
-  scroll: { padding: spacing.lg },
+const makeStyles = (colors: ColorScheme) =>
+  StyleSheet.create({
+    safe: { flex: 1, backgroundColor: colors.bg },
+    scroll: { padding: spacing.lg },
 
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  header: { ...typography.h1, color: colors.text },
-  subheader: { ...typography.body, color: colors.textFaint, marginTop: 4 },
+    headerRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+    },
+    header: { ...typography.h1, color: colors.text },
+    subheader: { ...typography.body, color: colors.textFaint, marginTop: 4 },
 
-  headerActions: { flexDirection: 'row', gap: spacing.sm },
-  headerIconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.card,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerIconBtnAccent: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.text,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  notifDot: {
-    position: 'absolute',
-    top: -4,
-    right: -4,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    paddingHorizontal: 4,
-    backgroundColor: colors.danger ?? '#ff3b30',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  notifDotText: { color: '#fff', fontSize: 10, fontWeight: '800' },
+    headerActions: { flexDirection: 'row', gap: spacing.sm },
+    headerIconBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.card,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    headerIconBtnAccent: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.text,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    notifDot: {
+      position: 'absolute',
+      top: -4,
+      right: -4,
+      minWidth: 18,
+      height: 18,
+      borderRadius: 9,
+      paddingHorizontal: 4,
+      backgroundColor: colors.danger ?? '#ff3b30',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    notifDotText: { color: '#fff', fontSize: 10, fontWeight: '800' },
 
-  sectionLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: spacing.lg,
-    marginBottom: spacing.xs,
-  },
-  sectionLabelLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  sectionLabel: {
-    ...typography.small,
-    color: colors.textDim,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  sectionMoreBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  sectionMoreText: { ...typography.small, color: colors.textFaint, fontWeight: '600' },
+    sectionLabelRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: spacing.lg,
+      marginBottom: spacing.xs,
+    },
+    sectionLabelLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    sectionLabel: {
+      ...typography.small,
+      color: colors.textDim,
+      fontWeight: '700',
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+    sectionMoreBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+    sectionMoreText: { ...typography.small, color: colors.textFaint, fontWeight: '600' },
 
-  rowScroll: { marginTop: 2 },
-  emptyRowText: { ...typography.small, color: colors.textFaint, paddingVertical: spacing.md },
+    rowScroll: { marginTop: 2 },
+    emptyRowText: { ...typography.small, color: colors.textFaint, paddingVertical: spacing.md },
 
-  storyBubble: { alignItems: 'center', marginRight: spacing.md, width: 72 },
-  ring: {
-    width: 66,
-    height: 66,
-    borderRadius: 33,
-    borderWidth: 2.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  addRing: {
-    borderColor: colors.border,
-    borderStyle: 'dashed',
-    backgroundColor: colors.card,
-  },
-  highlightRing: { borderColor: colors.border },
+    // -----------------------------------------------------------------
+    // 9:16 vertical story card (Friends row + My story row). Replaces
+    // the old round bubble: a tall rounded-rect thumbnail with a
+    // bottom gradient, a small round avatar chip floating over the
+    // bottom-left corner, and the name printed on the gradient.
+    // -----------------------------------------------------------------
+    storyCard: { alignItems: 'center', marginRight: spacing.sm, width: 104 },
+    storyCardFrame: {
+      width: 104,
+      height: 185, // 9:16 aspect ratio
+      borderRadius: radius.lg,
+      borderWidth: 2.5,
+      overflow: 'hidden',
+      backgroundColor: colors.card,
+      justifyContent: 'flex-end',
+    },
+    storyCardImage: { ...StyleSheet.absoluteFill, width: undefined, height: undefined },
+    storyCardAvatarFill: { alignItems: 'center', justifyContent: 'center' },
+    storyCardGradient: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      height: '55%',
+      backgroundColor: 'rgba(0,0,0,0.38)',
+    },
+    storyCardCountBadge: {
+      position: 'absolute',
+      top: 6,
+      right: 6,
+      minWidth: 20,
+      height: 20,
+      borderRadius: 10,
+      paddingHorizontal: 5,
+      backgroundColor: 'rgba(0,0,0,0.55)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    storyCardCountText: { color: '#fff', fontSize: 10, fontWeight: '800' },
+    storyCardAvatarChip: {
+      position: 'absolute',
+      left: 8,
+      bottom: 26,
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      overflow: 'hidden',
+      borderWidth: 1.5,
+      borderColor: '#fff',
+    },
+    storyCardAvatarChipImage: { width: '100%', height: '100%' },
+    storyCardName: {
+      color: '#fff',
+      fontSize: 12,
+      fontWeight: '700',
+      paddingHorizontal: 8,
+      paddingBottom: 8,
+    },
 
-  highlightGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    marginTop: 2,
-  },
-  highlightCard: {
-    width: '23.5%',
-    aspectRatio: 0.68,
-    borderRadius: radius.lg,
-    overflow: 'hidden',
-    backgroundColor: colors.card,
-    marginBottom: spacing.sm,
-  },
-  highlightCardImage: {
-    ...StyleSheet.absoluteFill,
-    width: undefined,
-    height: undefined,
-  },
-  highlightCardOverlay: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(0,0,0,0.18)',
-  },
-  highlightCardTitle: {
-    position: 'absolute',
-    bottom: spacing.sm,
-    left: spacing.xs,
-    right: spacing.xs,
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  bubbleThumb: { width: '100%', height: '100%' },
+    addCardFrame: {
+      borderColor: colors.border,
+      borderStyle: 'dashed',
+      backgroundColor: colors.card,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      paddingHorizontal: 8,
+    },
+    addCardText: {
+      ...typography.small,
+      color: colors.primary,
+      fontWeight: '700',
+      textAlign: 'center',
+    },
 
-  dotsBtn: {
-    position: 'absolute',
-    bottom: 20,
-    right: -2,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: colors.bg,
-  },
-  storyName: { ...typography.small, color: colors.textDim, marginTop: 6, textAlign: 'center' },
+    highlightGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent: 'flex-start',
+      gap: spacing.sm,
+      marginTop: 2,
+    },
+    highlightCard: {
+      width: '22%',
+      aspectRatio: 0.68,
+      borderRadius: radius.lg,
+      overflow: 'hidden',
+      backgroundColor: colors.card,
+      marginBottom: spacing.sm,
+    },
+    highlightCardImage: {
+      ...StyleSheet.absoluteFill,
+      width: undefined,
+      height: undefined,
+    },
+    highlightAddFill: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 2,
+      borderColor: colors.border,
+      borderStyle: 'dashed',
+    },
+    highlightAddTitle: {
+      position: 'absolute',
+      bottom: spacing.sm,
+      left: spacing.xs,
+      right: spacing.xs,
+      color: colors.primary,
+      fontSize: 12,
+      fontWeight: '700',
+      textAlign: 'center',
+    },
+    highlightCardOverlay: {
+      ...StyleSheet.absoluteFill,
+      backgroundColor: 'rgba(0,0,0,0.18)',
+    },
+    highlightCardTitle: {
+      position: 'absolute',
+      bottom: spacing.sm,
+      left: spacing.xs,
+      right: spacing.xs,
+      color: '#fff',
+      fontSize: 12,
+      fontWeight: '700',
+      textAlign: 'center',
+    },
+    highlightEmptyHint: { width: '100%' },
 
-  menuBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'flex-end',
-  },
-  menuSheet: {
-    backgroundColor: colors.card,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    padding: spacing.lg,
-    paddingBottom: spacing.xl,
-  },
-  menuSheetTitle: {
-    ...typography.body,
-    color: colors.textFaint,
-    fontWeight: '700',
-    marginBottom: spacing.sm,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.md,
-  },
-  menuItemText: { ...typography.body, color: colors.text, fontWeight: '600' },
+    dotsBtn: {
+      position: 'absolute',
+      bottom: 8,
+      right: 8,
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 2,
+      borderColor: colors.bg,
+    },
 
-  modalSafe: { flex: 1, backgroundColor: colors.bg },
-  modalHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    gap: spacing.sm,
-  },
-  modalTitle: { ...typography.h1, color: colors.text },
-  modalCloseBtn: { padding: spacing.sm },
-  modalCloseText: { color: colors.primary, fontWeight: '700' },
-  searchInputWrap: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.card,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-  },
-  searchInputIcon: { marginRight: spacing.xs },
-  searchInput: {
-    flex: 1,
-    paddingVertical: spacing.sm,
-    color: colors.text,
-    ...typography.body,
-  },
+    menuBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.4)',
+      justifyContent: 'flex-end',
+    },
+    menuSheet: {
+      backgroundColor: colors.card,
+      borderTopLeftRadius: radius.lg,
+      borderTopRightRadius: radius.lg,
+      padding: spacing.lg,
+      paddingBottom: spacing.xl,
+    },
+    menuSheetTitle: {
+      ...typography.body,
+      color: colors.textFaint,
+      fontWeight: '700',
+      marginBottom: spacing.sm,
+    },
+    menuItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      paddingVertical: spacing.md,
+    },
+    menuItemText: { ...typography.body, color: colors.text, fontWeight: '600' },
 
-  searchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-  },
-  searchAvatarImage: { width: 44, height: 44, borderRadius: 22 },
-  searchName: { ...typography.body, color: colors.text, fontWeight: '600' },
-  searchUsername: { ...typography.small, color: colors.textFaint, marginTop: 2 },
-  addFriendBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: colors.primary,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  addFriendBtnText: { color: colors.bg, fontWeight: '700', fontSize: 12 },
-  friendBadgeWrap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  friendBadge: { ...typography.small, color: colors.textFaint },
+    modalSafe: { flex: 1, backgroundColor: colors.bg },
+    modalHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.md,
+      paddingBottom: spacing.sm,
+      gap: spacing.sm,
+    },
+    modalTitle: { ...typography.h1, color: colors.text },
+    modalCloseBtn: { padding: spacing.sm },
+    modalCloseText: { color: colors.primary, fontWeight: '700' },
+    modalHint: {
+      ...typography.small,
+      color: colors.textFaint,
+      paddingHorizontal: spacing.lg,
+      paddingBottom: spacing.sm,
+    },
+    searchInputWrap: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.card,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.md,
+    },
+    searchInputIcon: { marginRight: spacing.xs },
+    searchInput: {
+      flex: 1,
+      paddingVertical: spacing.sm,
+      color: colors.text,
+      ...typography.body,
+    },
 
-  filterTabsRow: {
-    flexDirection: 'row',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-  },
-  filterTab: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: 6,
-    borderRadius: radius.pill,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  filterTabActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
-  filterTabText: { ...typography.small, color: colors.textDim, fontWeight: '600' },
-  filterTabTextActive: { color: colors.bg },
+    searchRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: spacing.sm,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    searchAvatarImage: { width: 44, height: 44, borderRadius: 22 },
+    searchName: { ...typography.body, color: colors.text, fontWeight: '600' },
+    searchUsername: { ...typography.small, color: colors.textFaint, marginTop: 2 },
+    addFriendBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      backgroundColor: colors.primary,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.xs,
+    },
+    addFriendBtnText: { color: colors.bg, fontWeight: '700', fontSize: 12 },
+    friendBadgeWrap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    friendBadge: { ...typography.small, color: colors.textFaint },
 
-  notifRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.md,
-  },
-  notifRowUnread: { backgroundColor: colors.card },
-  notifAvatarWrap: { position: 'relative' },
-  notifAvatarImage: { width: 40, height: 40, borderRadius: 20 },
-  notifIconBadge: {
-    position: 'absolute',
-    bottom: -2,
-    right: -2,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: colors.bg,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: colors.bg,
-  },
-  notifText: { ...typography.body, color: colors.text, flex: 1 },
-  notifMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    marginTop: 3,
-  },
-  notifTime: { ...typography.small, color: colors.textFaint },
-  notifBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: radius.pill,
-  },
-  notifBadgeFriend: { backgroundColor: colors.primary + '22' },
-  notifBadgeContact: { backgroundColor: colors.border },
-  notifBadgeText: { fontSize: 10, fontWeight: '700', color: colors.textDim },
-});
+    filterTabsRow: {
+      flexDirection: 'row',
+      gap: spacing.xs,
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.md,
+    },
+    filterTab: {
+      paddingHorizontal: spacing.md,
+      paddingVertical: 6,
+      borderRadius: radius.pill,
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    filterTabActive: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    filterTabText: { ...typography.small, color: colors.textDim, fontWeight: '600' },
+    filterTabTextActive: { color: colors.bg },
+
+    notifRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.sm,
+      borderRadius: radius.md,
+    },
+    notifRowUnread: { backgroundColor: colors.card },
+    notifAvatarWrap: { position: 'relative' },
+    notifAvatarImage: { width: 40, height: 40, borderRadius: 20 },
+    notifIconBadge: {
+      position: 'absolute',
+      bottom: -2,
+      right: -2,
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      backgroundColor: colors.bg,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 2,
+      borderColor: colors.bg,
+    },
+    notifText: { ...typography.body, color: colors.text, flex: 1 },
+    notifMetaRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+      marginTop: 3,
+    },
+    notifTime: { ...typography.small, color: colors.textFaint },
+    notifBadge: {
+      paddingHorizontal: 8,
+      paddingVertical: 2,
+      borderRadius: radius.pill,
+    },
+    notifBadgeFriend: { backgroundColor: colors.primary + '22' },
+    notifBadgeContact: { backgroundColor: colors.border },
+    notifBadgeText: { fontSize: 10, fontWeight: '700', color: colors.textDim },
+
+    // -----------------------------------------------------------------
+    // Browse-friends full-screen grid ("More" from the Friends row)
+    // -----------------------------------------------------------------
+    browseCard: {
+      flex: 1,
+      aspectRatio: 0.58, // tall 9:16-ish card, two per row
+      borderRadius: radius.lg,
+      overflow: 'hidden',
+      backgroundColor: colors.card,
+    },
+    browseCardImage: { ...StyleSheet.absoluteFill, width: undefined, height: undefined },
+    browseCardGradient: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      height: '45%',
+      backgroundColor: 'rgba(0,0,0,0.45)',
+    },
+    browseVideoBadge: {
+      position: 'absolute',
+      top: 8,
+      left: 8,
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: 'rgba(0,0,0,0.5)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    browseCardFooter: {
+      position: 'absolute',
+      left: 8,
+      right: 8,
+      bottom: 8,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    browseCardAvatarRing: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      borderWidth: 2,
+      overflow: 'hidden',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    browseCardAvatarImage: { width: '100%', height: '100%' },
+    browseCardName: { color: '#fff', fontSize: 13, fontWeight: '700', flexShrink: 1 },
+
+    // -----------------------------------------------------------------
+    // Add-highlight modal: expired-story picker grid + preview
+    // -----------------------------------------------------------------
+    pickerThumb: {
+      flex: 1,
+      aspectRatio: 1,
+      borderRadius: radius.md,
+      overflow: 'hidden',
+      backgroundColor: colors.card,
+    },
+    pickerThumbImage: { width: '100%', height: '100%' },
+    selectedPreviewRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      marginBottom: spacing.lg,
+    },
+    selectedPreviewImage: {
+      width: 56,
+      height: 96,
+      borderRadius: radius.md,
+      backgroundColor: colors.card,
+    },
+  });
 
 export default StoriesScreen;

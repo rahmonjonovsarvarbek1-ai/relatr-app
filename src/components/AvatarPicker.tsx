@@ -3,9 +3,9 @@ import { View, Text, TouchableOpacity, StyleSheet, Image, Alert, ActivityIndicat
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, typography } from '../theme/theme';
-// The upload helper may not have a TypeScript declaration in older project setups.
+
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore -- keep this component compatible with the existing JavaScript helper.
+// @ts-ignore
 import { uploadFriendPhoto } from '../utils/uploadImage';
 import { useAuth } from '../context/AuthContext';
 
@@ -31,7 +31,8 @@ const AvatarPicker: React.FC<Props> = ({ photoUri, emoji, color, size = 84, onCh
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
+      // SHU YERDA TUZATILDI: MediaTypeOptions foydalanildi
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.7,

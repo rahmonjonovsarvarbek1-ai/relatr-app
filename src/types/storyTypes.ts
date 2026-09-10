@@ -32,6 +32,7 @@ export type StoryLocationSticker = {
 };
 
 export type StoryRow = {
+  [x: string]: any;
   id: string;
   owner_id: string;
   media_url: string;
@@ -121,3 +122,31 @@ export const STORY_FONTS: { id: string; label: string; fontFamily: string | unde
 export const STORY_TEXT_COLORS = [
   '#FFFFFF', '#000000', '#FF3B5C', '#FFD93D', '#4ADE80', '#38BDF8', '#A78BFA', '#FB923C',
 ];
+
+/**
+ * Additions to types/storyTypes.ts to support:
+ *  - showing who posted the story (poster identity on the frame)
+ *  - showing the viewer count (only visible to the poster, i.e. group.isMine)
+ *
+ * Merge these into the existing storyTypes.ts file.
+ */
+
+export type StoryViewerEntry = {
+  id: string;
+  friendId: string;
+  friendName: string;
+  emoji?: string | null;
+  color?: string | null;
+  viewedAt: string; // ISO timestamp
+};
+
+// Extend StoryRow (already existing) with a denormalized viewer_count
+// column so the UI can render it instantly without a join, plus poster
+// display fields resolved from the profiles table.
+export type StoryRowExtras = {
+  viewer_count: number;
+  poster_name: string;
+  poster_emoji?: string | null;
+  poster_color?: string | null;
+  created_at: string; // ISO timestamp, used for "2h ago" style labels
+};

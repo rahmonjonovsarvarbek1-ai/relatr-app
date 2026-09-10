@@ -31,7 +31,7 @@ import {
 import { Note, ImportantDate, ImportantDateType, Gender, SocialLink } from '../types';
 import DateFields from '../components/DateFields';
 import { newId } from '../utils/id';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const GIFT_IDEAS: Record<string, string[]> = {
   Photography: ['A roll of film', 'Photo album / scrapbook', 'Camera strap'],
@@ -78,6 +78,7 @@ type EditSection = 'main' | 'personal' | 'contact' | 'social' | 'preferences';
 const FriendProfileScreen: React.FC = () => {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
   const {
     friends,
     updateFriend,
@@ -818,8 +819,13 @@ const FriendProfileScreen: React.FC = () => {
       {/* -------------------- FULL-SCREEN EDIT PROFILE MODAL -------------------- */}
       {/* Mirrors ProfileScreen's settings full-screen modal: a top bar with */}
       {/* back/close + section title, and a set of sub-pages. */}
+      {/* NOTE: react-native-safe-area-context's <SafeAreaView> can fail to */}
+      {/* compute correct insets inside a full-screen <Modal> on some devices */}
+      {/* (the status bar/notch area gets overlapped). To guarantee correct */}
+      {/* spacing every time, we use a plain View here and apply insets.top */}
+      {/* manually via useSafeAreaInsets(). */}
       <Modal visible={editing} animationType="slide" onRequestClose={() => setEditing(false)}>
-        <SafeAreaView style={styles.settingsSafe}>
+        <View style={[styles.settingsSafe, { paddingTop: insets.top }]}>
           <View style={styles.settingsTopBar}>
             <TouchableOpacity
               onPress={() => (editSection === 'main' ? setEditing(false) : setEditSection('main'))}
@@ -844,7 +850,11 @@ const FriendProfileScreen: React.FC = () => {
             )}
           </View>
 
-          <ScrollView contentContainerStyle={styles.settingsScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            contentContainerStyle={[styles.settingsScroll, { paddingBottom: insets.bottom + spacing.xxl }]}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
             {editSection === 'main' && (
               <>
                 <View style={{ alignItems: 'center', marginVertical: spacing.lg }}>
@@ -920,94 +930,94 @@ const FriendProfileScreen: React.FC = () => {
             )}
 
             {editSection === 'personal' && (
-  <>
-    <Text style={styles.label}>Birthday</Text>
-    <TouchableOpacity
-      style={styles.birthdayToggle}
-      onPress={() => setHasBirthday((prev) => !prev)}
-      activeOpacity={0.7}
-      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-    >
-      <View style={[styles.checkbox, hasBirthday && styles.checkboxActive]}>
-        {hasBirthday && <View style={styles.checkboxDot} />}
-      </View>
-      <Text style={styles.birthdayToggleText}>Track their birthday</Text>
-    </TouchableOpacity>
+              <>
+                <Text style={styles.label}>Birthday</Text>
+                <TouchableOpacity
+                  style={styles.birthdayToggle}
+                  onPress={() => setHasBirthday((prev) => !prev)}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <View style={[styles.checkbox, hasBirthday && styles.checkboxActive]}>
+                    {hasBirthday && <View style={styles.checkboxDot} />}
+                  </View>
+                  <Text style={styles.birthdayToggleText}>Track their birthday</Text>
+                </TouchableOpacity>
 
-    {hasBirthday && (
-      <View style={styles.birthdayFieldsWrap}>
-        <DateFields
-          value={birthdayISO}
-          yearKnown={birthdayYearKnown}
-          onChange={(iso, known) => {
-            setBirthdayISO(iso);
-            setBirthdayYearKnown(known);
-          }}
-        />
-        {birthdayYearKnown && getAgeTurning(birthdayISO) != null ? (
-          <View style={styles.ageBadge}>
-            <Ionicons name="balloon-outline" size={14} color={colors.primary} />
-            <Text style={styles.ageBadgeText}>
-              Turns {getAgeTurning(birthdayISO)} this year · {formatRelativeDay(daysUntilNextOccurrence(birthdayISO))}
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.ageBadge}>
-            <Ionicons name="calendar-outline" size={14} color={colors.textDim} />
-            <Text style={styles.ageBadgeText}>
-              {formatRelativeDay(daysUntilNextOccurrence(birthdayISO))} · year not set, so age isn't shown
-            </Text>
-          </View>
-        )}
-      </View>
-    )}
+                {hasBirthday && (
+                  <View style={styles.birthdayFieldsWrap}>
+                    <DateFields
+                      value={birthdayISO}
+                      yearKnown={birthdayYearKnown}
+                      onChange={(iso, known) => {
+                        setBirthdayISO(iso);
+                        setBirthdayYearKnown(known);
+                      }}
+                    />
+                    {birthdayYearKnown && getAgeTurning(birthdayISO) != null ? (
+                      <View style={styles.ageBadge}>
+                        <Ionicons name="balloon-outline" size={14} color={colors.primary} />
+                        <Text style={styles.ageBadgeText}>
+                          Turns {getAgeTurning(birthdayISO)} this year · {formatRelativeDay(daysUntilNextOccurrence(birthdayISO))}
+                        </Text>
+                      </View>
+                    ) : (
+                      <View style={styles.ageBadge}>
+                        <Ionicons name="calendar-outline" size={14} color={colors.textDim} />
+                        <Text style={styles.ageBadgeText}>
+                          {formatRelativeDay(daysUntilNextOccurrence(birthdayISO))} · year not set, so age isn't shown
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                )}
 
-    <Text style={styles.label}>Gender</Text>
-    <View style={styles.wrapRow}>
-      {GENDERS.map((g) => (
-        <Chip key={g} label={g} active={gender === g} onPress={() => setGender(g)} />
-      ))}
-    </View>
-    {gender === 'Custom' && (
-      <TextInput
-        style={styles.input}
-        value={genderCustom}
-        onChangeText={setGenderCustom}
-        placeholder="Custom gender"
-        placeholderTextColor={colors.textFaint}
-      />
-    )}
+                <Text style={styles.label}>Gender</Text>
+                <View style={styles.wrapRow}>
+                  {GENDERS.map((g) => (
+                    <Chip key={g} label={g} active={gender === g} onPress={() => setGender(g)} />
+                  ))}
+                </View>
+                {gender === 'Custom' && (
+                  <TextInput
+                    style={styles.input}
+                    value={genderCustom}
+                    onChangeText={setGenderCustom}
+                    placeholder="Custom gender"
+                    placeholderTextColor={colors.textFaint}
+                  />
+                )}
 
-    <Text style={styles.label}>Pronouns</Text>
-    <TextInput
-      style={styles.input}
-      value={pronouns}
-      onChangeText={setPronouns}
-      placeholder="e.g. she/her, they/them"
-      placeholderTextColor={colors.textFaint}
-    />
+                <Text style={styles.label}>Pronouns</Text>
+                <TextInput
+                  style={styles.input}
+                  value={pronouns}
+                  onChangeText={setPronouns}
+                  placeholder="e.g. she/her, they/them"
+                  placeholderTextColor={colors.textFaint}
+                />
 
-    <Text style={styles.label}>How we met</Text>
-    <TextInput
-      style={[styles.input, { minHeight: 70, textAlignVertical: 'top' }]}
-      value={howWeMet}
-      onChangeText={setHowWeMet}
-      multiline
-      placeholderTextColor={colors.textFaint}
-    />
+                <Text style={styles.label}>How we met</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 70, textAlignVertical: 'top' }]}
+                  value={howWeMet}
+                  onChangeText={setHowWeMet}
+                  multiline
+                  placeholderTextColor={colors.textFaint}
+                />
 
-    <Text style={styles.label}>Personality notes</Text>
-    <TextInput
-      style={[styles.input, { minHeight: 70, textAlignVertical: 'top' }]}
-      value={personalityNotes}
-      onChangeText={setPersonalityNotes}
-      multiline
-      placeholder="Introvert, loves deep conversations, night owl..."
-      placeholderTextColor={colors.textFaint}
-    />
-    <View style={{ height: spacing.xxl }} />
-  </>
-)}
+                <Text style={styles.label}>Personality notes</Text>
+                <TextInput
+                  style={[styles.input, { minHeight: 70, textAlignVertical: 'top' }]}
+                  value={personalityNotes}
+                  onChangeText={setPersonalityNotes}
+                  multiline
+                  placeholder="Introvert, loves deep conversations, night owl..."
+                  placeholderTextColor={colors.textFaint}
+                />
+                <View style={{ height: spacing.xxl }} />
+              </>
+            )}
 
             {editSection === 'contact' && (
               <>
@@ -1129,7 +1139,7 @@ const FriendProfileScreen: React.FC = () => {
               </TouchableOpacity>
             )}
           </ScrollView>
-        </SafeAreaView>
+        </View>
       </Modal>
     </SafeAreaView>
   );

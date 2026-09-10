@@ -773,8 +773,6 @@ const ContactProfileScreen: React.FC = () => {
           onClose={() => setViewerOpen(false)}
           onViewed={() => {}}
           onToggleLike={async () => {}}
-          screenW={SCREEN_W}
-          screenH={SCREEN_H}
         />
       )}
     </SafeAreaView>

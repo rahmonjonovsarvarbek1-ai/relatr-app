@@ -5,7 +5,6 @@ import {
   View,
   Animated,
   PanResponder,
-  Platform,
 } from 'react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
 
@@ -97,8 +96,8 @@ const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(ma
 /**
  * Wraps children in a pinch-to-zoom + pan-when-zoomed gesture layer.
  * Two-finger pinch scales (1x–4x); single-finger drag pans while zoomed.
- * Double behavior is intentionally simple/robust rather than
- * physics-heavy, matching what a story viewer/composer needs.
+ * Kept intentionally simple/robust rather than physics-heavy, matching
+ * what a story viewer/composer needs.
  */
 const ZoomableStage: React.FC<{
   width: number;
@@ -114,7 +113,6 @@ const ZoomableStage: React.FC<{
   const lastScale = useRef(1);
   const lastTranslate = useRef({ x: 0, y: 0 });
   const initialPinchDistance = useRef<number | null>(null);
-  const initialTouches = useRef<{ x: number; y: number }[]>([]);
 
   const MIN_SCALE = 1;
   const MAX_SCALE = 4;
@@ -360,3 +358,4 @@ const styles = StyleSheet.create({
 });
 
 export default StoryMedia;
+export { computeLayoutBox, resolveFitMode, STORY_RATIO };
