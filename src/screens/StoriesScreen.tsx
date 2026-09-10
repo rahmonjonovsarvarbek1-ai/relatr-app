@@ -54,6 +54,32 @@ import {
 } from '../types/storyTypes';
 
 // ---------------------------------------------------------------------
+// Small date helper — "2m", "3h", "5d" style relative time used in the
+// notifications list. Kept local to this file since it's only needed
+// here; move to a shared utils/date.ts if another screen needs it too.
+// ---------------------------------------------------------------------
+const timeAgo = (iso?: string | null): string => {
+  if (!iso) return '';
+  const diffMs = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(diffMs)) return '';
+  const sec = Math.floor(diffMs / 1000);
+  if (sec < 5) return 'hozir';
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `${day}d`;
+  const week = Math.floor(day / 7);
+  if (week < 5) return `${week}w`;
+  const month = Math.floor(day / 30);
+  if (month < 12) return `${month}mo`;
+  const year = Math.floor(day / 365);
+  return `${year}y`;
+};
+
+// ---------------------------------------------------------------------
 // Screen
 // ---------------------------------------------------------------------
 
@@ -199,6 +225,20 @@ const StoriesScreen: React.FC = () => {
     if (data) setViewedIds(new Set(data.map((r: { story_id: string }) => r.story_id)));
   }, [currentUserId]);
 
+  // -----------------------------------------------------------------
+  // Notifications
+  //
+  // DATA-INTEGRITY NOTE: `notifications.actor_id` is a FK to
+  // `profiles(id)` (see `notifications_actor_id_fkey` below), so any
+  // row written through the app's normal code paths is guaranteed to
+  // carry a real profiles.id. If you still see ContactProfileScreen's
+  // "params.userId was actually a friendships.id" warning after
+  // opening a notification, that row's actor_id was written *before*
+  // this FK was in place (e.g. by an old build, or by seed.ts using
+  // the wrong id) — it's bad legacy data, not a bug in this screen.
+  // Run the repair migration in the SQL notes to fix existing rows;
+  // no new writes should ever hit this path with the FK enforced.
+  // -----------------------------------------------------------------
   const loadNotifications = useCallback(async () => {
     if (!currentUserId) return;
     const { data, error } = await supabase
@@ -697,6 +737,7 @@ const StoriesScreen: React.FC = () => {
         visible={notifOpen}
         onClose={() => setNotifOpen(false)}
         notifications={notifications}
+        friends={friends}
         onOpenProfile={(n: any) => {
           setNotifOpen(false);
           openContactProfile(n.actor_id, {
@@ -999,19 +1040,43 @@ const SearchModal: React.FC<{
 };
 
 // ---------------------------------------------------------------------
-// Notifications modal — same fix: wrapped in its own SafeAreaProvider
-// so the header never renders under the status bar/notch inside the
-// modal's separate native window.
+// Notifications modal — same SafeAreaProvider fix as SearchModal, plus:
+//  - a relative "time ago" under each notification (created_at)
+//  - a "Contact" / "New" tag telling you whether the actor is already
+//    an accepted contact or not (derived from the `friends` list
+//    already loaded by the parent — no extra query needed)
+//  - filter tabs: All / Requests (follow_request only) / Contacts
 // ---------------------------------------------------------------------
+
+type NotifFilter = 'all' | 'requests' | 'contacts';
 
 const NotificationsModal: React.FC<{
   visible: boolean;
   onClose: () => void;
   notifications: NotificationRow[];
+  friends: any[];
   onOpenProfile: (n: NotificationRow) => void;
-}> = ({ visible, onClose, notifications, onOpenProfile }) => {
+}> = ({ visible, onClose, notifications, friends, onOpenProfile }) => {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  const [filter, setFilter] = useState<NotifFilter>('all');
+
+  useEffect(() => {
+    if (!visible) setFilter('all');
+  }, [visible]);
+
+  // Accepted-friend ids, used for the "Contacts" tag/filter. `friends`
+  // already only contains accepted friendships (see AppContext), so
+  // membership == an accepted contact.
+  const friendIds = useMemo(() => new Set((friends ?? []).map((f: any) => f.id)), [friends]);
+
+  const filtered = useMemo(() => {
+    if (filter === 'all') return notifications;
+    if (filter === 'requests') return notifications.filter((n: any) => n.type === 'follow_request');
+    // contacts: notifications from people already in your contacts
+    return notifications.filter((n: any) => friendIds.has(n.actor_id));
+  }, [notifications, filter, friendIds]);
+
   const describe = (n: NotificationRow) => {
     switch (n.type) {
       case 'like':
@@ -1041,6 +1106,12 @@ const NotificationsModal: React.FC<{
     }
   };
 
+  const FILTERS: { key: NotifFilter; label: string }[] = [
+    { key: 'all', label: 'All' },
+    { key: 'requests', label: 'Requests' },
+    { key: 'contacts', label: 'Contacts' },
+  ];
+
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <SafeAreaProvider initialMetrics={initialWindowMetrics}>
@@ -1052,30 +1123,61 @@ const NotificationsModal: React.FC<{
             </TouchableOpacity>
           </View>
 
+          <View style={styles.filterTabsRow}>
+            {FILTERS.map((f) => (
+              <TouchableOpacity
+                key={f.key}
+                style={[styles.filterTab, filter === f.key && styles.filterTabActive]}
+                onPress={() => setFilter(f.key)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.filterTabText, filter === f.key && styles.filterTabTextActive]}>
+                  {f.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
           <FlatList
-            data={notifications}
+            data={filtered}
             keyExtractor={(item) => item.id}
             contentContainerStyle={{ padding: spacing.lg }}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={[styles.notifRow, !item.read && styles.notifRowUnread]}
-                activeOpacity={0.7}
-                onPress={() => onOpenProfile(item)}
-              >
-                <View style={styles.notifAvatarWrap}>
-                  {(item as any).actor_avatar_url ? (
-                    <Image source={{ uri: (item as any).actor_avatar_url }} style={styles.notifAvatarImage} />
-                  ) : (
-                    <Avatar emoji={item.actor_emoji} color={item.actor_color} size={40} />
-                  )}
-                  <View style={styles.notifIconBadge}>
-                    <NotifIcon type={item.type} />
+            renderItem={({ item }) => {
+              const isFriend = friendIds.has((item as any).actor_id);
+              const when = timeAgo((item as any).created_at);
+              return (
+                <TouchableOpacity
+                  style={[styles.notifRow, !item.read && styles.notifRowUnread]}
+                  activeOpacity={0.7}
+                  onPress={() => onOpenProfile(item)}
+                >
+                  <View style={styles.notifAvatarWrap}>
+                    {(item as any).actor_avatar_url ? (
+                      <Image source={{ uri: (item as any).actor_avatar_url }} style={styles.notifAvatarImage} />
+                    ) : (
+                      <Avatar emoji={item.actor_emoji} color={item.actor_color} size={40} />
+                    )}
+                    <View style={styles.notifIconBadge}>
+                      <NotifIcon type={item.type} />
+                    </View>
                   </View>
-                </View>
-                <Text style={styles.notifText}>{describe(item)}</Text>
-              </TouchableOpacity>
-            )}
-            ListEmptyComponent={<Text style={styles.emptyRowText}>No notifications yet</Text>}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.notifText}>{describe(item)}</Text>
+                    <View style={styles.notifMetaRow}>
+                      {!!when && <Text style={styles.notifTime}>{when}</Text>}
+                      <View style={[styles.notifBadge, isFriend ? styles.notifBadgeFriend : styles.notifBadgeContact]}>
+                        <Text style={styles.notifBadgeText}>{isFriend ? 'Contact' : 'New'}</Text>
+                      </View>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              );
+            }}
+            ListEmptyComponent={
+              <Text style={styles.emptyRowText}>
+                {filter === 'all' ? 'No notifications yet' : 'Nothing here for this filter'}
+              </Text>
+            }
           />
         </SafeAreaView>
       </SafeAreaProvider>
@@ -1295,6 +1397,27 @@ const makeStyles = (colors: ColorScheme) => StyleSheet.create({
   friendBadgeWrap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   friendBadge: { ...typography.small, color: colors.textFaint },
 
+  filterTabsRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+  },
+  filterTab: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  filterTabActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  filterTabText: { ...typography.small, color: colors.textDim, fontWeight: '600' },
+  filterTabTextActive: { color: colors.bg },
+
   notifRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1320,6 +1443,21 @@ const makeStyles = (colors: ColorScheme) => StyleSheet.create({
     borderColor: colors.bg,
   },
   notifText: { ...typography.body, color: colors.text, flex: 1 },
+  notifMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: 3,
+  },
+  notifTime: { ...typography.small, color: colors.textFaint },
+  notifBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+  },
+  notifBadgeFriend: { backgroundColor: colors.primary + '22' },
+  notifBadgeContact: { backgroundColor: colors.border },
+  notifBadgeText: { fontSize: 10, fontWeight: '700', color: colors.textDim },
 });
 
 export default StoriesScreen;
