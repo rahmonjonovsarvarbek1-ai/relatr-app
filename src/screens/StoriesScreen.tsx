@@ -11,7 +11,7 @@ import {
   Alert,
   TextInput,
   FlatList,
-  useWindowDimensions,
+  Platform,
 } from 'react-native';
 import { SafeAreaView, SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -30,10 +30,8 @@ import {
   Trash2,
   BookmarkPlus,
   ChevronRight,
-  X,
   Play,
 } from 'lucide-react-native';
-import { useApp } from '../context/AppContext';
 import { useTheme } from '../context/ThemeContext';
 import { useNavigation } from '@react-navigation/native';
 import { radius, spacing, typography } from '../theme/theme';
@@ -57,10 +55,12 @@ import {
 } from '../types/storyTypes';
 
 // ---------------------------------------------------------------------
-// Small date helper — "2m", "3h", "5d" style relative time used in the
-// notifications list. Kept local to this file since it's only needed
-// here; move to a shared utils/date.ts if another screen needs it too.
+// Helpers
 // ---------------------------------------------------------------------
+
+// "2m", "3h", "5d" style relative time used in the notifications list.
+// Kept local to this file since it's only needed here; move to a
+// shared utils/date.ts if another screen needs it too.
 const timeAgo = (iso?: string | null): string => {
   if (!iso) return '';
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -82,6 +82,27 @@ const timeAgo = (iso?: string | null): string => {
   return `${year}y`;
 };
 
+// Safely derives a file extension for uploaded media.
+//
+// expo-image-picker returns a "blob:" URI on web (no real file
+// extension present in the string), so naively doing
+// `uri.split('.').pop()` can pull the entire blob URL in as the
+// "extension" and corrupt the resulting storage path/public URL.
+// This falls back to a sane default whenever the URI isn't a normal
+// file-style path, or when whatever comes after the last dot doesn't
+// look like a real extension.
+const getSafeExt = (rawUri: string, mediaType: 'image' | 'video'): string => {
+  const fallback = mediaType === 'video' ? 'mp4' : 'jpg';
+  if (rawUri.startsWith('blob:') || rawUri.startsWith('data:')) {
+    return fallback;
+  }
+  const last = rawUri.split('.').pop();
+  if (!last || last.length > 5 || !/^[a-zA-Z0-9]+$/.test(last)) {
+    return fallback;
+  }
+  return last.toLowerCase();
+};
+
 // ---------------------------------------------------------------------
 // Screen
 // ---------------------------------------------------------------------
@@ -90,7 +111,7 @@ const StoriesScreen: React.FC = () => {
   const { friends, refresh: refreshFriends } = useConnectedFriends();
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
-  const { width: SCREEN_W, height: SCREEN_H } = useWindowDimensions();
+
   const navigation = useNavigation<any>();
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -113,10 +134,44 @@ const StoriesScreen: React.FC = () => {
   const [composerUri, setComposerUri] = useState<string | null>(null);
   const [composerType, setComposerType] = useState<'image' | 'video'>('image');
 
+  // One-time mount log — moved into an effect so it fires once per
+  // real mount instead of on every re-render (it was previously in
+  // the render body, which is why the terminal showed it 8-9 times).
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      setCurrentUserId(data.user?.id ?? null);
+    console.log('[DEBUG] StoriesScreen mounted, Platform:', Platform.OS);
+  }, []);
+
+  // Step 1: resolve the current auth user reliably.
+  //
+  // FIX: `supabase.auth.getUser()` makes a network round-trip to
+  // validate the token and can resolve *before* the underlying
+  // PostgREST client has the Authorization header fully attached for
+  // the very next query — this caused `loadHighlights()`'s first call
+  // to run as if unauthenticated (RLS silently returned 0 rows), and
+  // only a later call (e.g. triggered by the realtime subscription)
+  // would return the correct data. We now read the session
+  // synchronously via `getSession()` (backed by local storage, no
+  // network wait) and also listen to `onAuthStateChange`, which is the
+  // pattern Supabase recommends for driving app state off auth.
+  useEffect(() => {
+    let mounted = true;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      const userId = data.session?.user?.id ?? null;
+      setCurrentUserId((prevId) => (prevId !== userId ? userId : prevId));
     });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
+      const userId = session?.user?.id ?? null;
+      setCurrentUserId((prevId) => (prevId !== userId ? userId : prevId));
+    });
+
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
   }, []);
 
   // Opens ContactProfileScreen for a given user id, optionally seeded
@@ -201,8 +256,11 @@ const StoriesScreen: React.FC = () => {
   }, [currentUserId]);
 
   const loadHighlights = useCallback(async () => {
-    if (!currentUserId) return;
+    if (!currentUserId) {
+      return;
+    }
     setHighlightsLoading(true);
+
     const { data, error } = await supabase
       .from('stories')
       .select('*')
@@ -283,30 +341,54 @@ const StoriesScreen: React.FC = () => {
     }
   }, [currentUserId]);
 
+  // Step 2: once we actually know who the user is, load everything
+  // that depends on currentUserId. Previously this ran in a `[]`
+  // effect, so on first mount it fired with currentUserId still null
+  // (auth hadn't resolved yet) and never re-ran when the id arrived.
   useEffect(() => {
+    if (!currentUserId) return;
     loadStories();
     loadViewedIds();
     loadHighlights();
     loadNotifications();
     loadExpiredMyStories();
+  }, [currentUserId, loadStories, loadViewedIds, loadHighlights, loadNotifications, loadExpiredMyStories]);
 
+  // Step 3: realtime subscription — set up once, independent of
+  // currentUserId, and always use the latest callbacks via refs so we
+  // don't need to resubscribe every time currentUserId changes.
+  const loadStoriesRef = useRef(loadStories);
+  const loadHighlightsRef = useRef(loadHighlights);
+  const loadExpiredMyStoriesRef = useRef(loadExpiredMyStories);
+  const loadNotificationsRef = useRef(loadNotifications);
+  const refreshFriendsRef = useRef(refreshFriends);
+
+  useEffect(() => {
+    loadStoriesRef.current = loadStories;
+    loadHighlightsRef.current = loadHighlights;
+    loadExpiredMyStoriesRef.current = loadExpiredMyStories;
+    loadNotificationsRef.current = loadNotifications;
+    refreshFriendsRef.current = refreshFriends;
+  }, [loadStories, loadHighlights, loadExpiredMyStories, loadNotifications, refreshFriends]);
+
+  useEffect(() => {
     const channel = supabase
       .channel('stories-feed')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stories' }, () => {
-        loadStories();
-        loadHighlights();
-        loadExpiredMyStories();
+        loadStoriesRef.current();
+        loadHighlightsRef.current();
+        loadExpiredMyStoriesRef.current();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'story_likes' }, () => {
-        loadStories();
+        loadStoriesRef.current();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => {
-        loadNotifications();
+        loadNotificationsRef.current();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, () => {
-        loadStories();
-        if (typeof refreshFriends === 'function') {
-          refreshFriends();
+        loadStoriesRef.current();
+        if (typeof refreshFriendsRef.current === 'function') {
+          refreshFriendsRef.current();
         }
       })
       .subscribe();
@@ -314,7 +396,7 @@ const StoriesScreen: React.FC = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [loadStories, loadViewedIds, loadHighlights, loadNotifications, loadExpiredMyStories, refreshFriends]);
+  }, []); // subscribe exactly once
 
   const groups: FriendStoryGroup[] = useMemo(() => {
     const byFriend = new Map<string, StoryRow[]>();
@@ -390,7 +472,7 @@ const StoriesScreen: React.FC = () => {
       const ownerId = user.id;
 
       const caption = payload.caption ?? '';
-      const fileExt = uri.split('.').pop() ?? (mediaType === 'video' ? 'mp4' : 'jpg');
+      const fileExt = getSafeExt(uri, mediaType);
       const fileName = `${ownerId}/${Date.now()}.${fileExt}`;
 
       const file = new FileSystem.File(uri);
@@ -427,7 +509,6 @@ const StoriesScreen: React.FC = () => {
         .single();
 
       if (insertError) {
-        console.error('insertError full:', JSON.stringify(insertError));
         throw insertError;
       }
 
@@ -542,7 +623,7 @@ const StoriesScreen: React.FC = () => {
         .single();
 
       if (error || !data) {
-        console.error('addToHighlight error full:', JSON.stringify(error, null, 2));
+        console.error('addToHighlight error:', error?.message);
         Alert.alert('Error', 'Could not save to highlights.');
         return;
       }
@@ -723,7 +804,25 @@ const StoriesScreen: React.FC = () => {
                 onPress={() => setActiveHighlight(h)}
                 activeOpacity={0.85}
               >
-                <Image source={{ uri: h.coverUrl }} style={styles.highlightCardImage} />
+                <Image
+                  source={{ uri: h.coverUrl }}
+                  style={styles.highlightCardImage}
+                  // FIX: previously a broken/blocked image URL (e.g. a
+                  // non-public storage bucket) would just render as a
+                  // blank tile with no feedback, making it look like
+                  // the highlight "wasn't showing" even though the
+                  // data had loaded correctly. Logging onError/onLoad
+                  // makes the real cause visible immediately in the
+                  // console instead of guessing.
+                  onError={(e) =>
+                    console.error(
+                      '[HL] image failed to load for highlight',
+                      h.title,
+                      h.coverUrl,
+                      e.nativeEvent.error
+                    )
+                  }
+                />
                 <View style={styles.highlightCardOverlay} />
                 <Text style={styles.highlightCardTitle} numberOfLines={1}>
                   {h.title}

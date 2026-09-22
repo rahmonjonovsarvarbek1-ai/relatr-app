@@ -10,6 +10,7 @@ import {
   Image,
   TextInput,
 } from 'react-native';
+import * as Location from 'expo-location';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
 import { radius, spacing, typography } from '../theme/theme';
@@ -52,6 +53,15 @@ interface FriendUpcomingItem {
 // self and anyone already an accepted friend/contact. Collapsible via a
 // show/hide toggle, matching "agar hohlasa uni show yoki close qilsa
 // boladigon" requirement.
+//
+// NOTE (fix): the current user's own latitude/longitude must exist in
+// `profiles` before we can query anyone nearby. Previously nothing in
+// this screen ever requested location permission or wrote the
+// coordinates back to the `profiles` row, so `me.latitude`/`longitude`
+// were always null and the list stayed empty. We now request
+// foreground location permission and upsert the coordinates into
+// `profiles` at the start of `load()`, mirroring what the older
+// `expo-location` based component used to do against `user_locations`.
 // ---------------------------------------------------------------------
 
 interface NearbyProfile {
@@ -123,6 +133,7 @@ const NearbySuggestions: React.FC<{
   const [loading, setLoading] = useState(true);
   const [nearby, setNearby] = useState<NearbyProfile[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [permissionDenied, setPermissionDenied] = useState(false);
 
   const isMountedRef = useRef(true);
   useEffect(() => {
@@ -136,25 +147,45 @@ const NearbySuggestions: React.FC<{
     if (!meId) return;
     setLoading(true);
     setError(null);
+    setPermissionDenied(false);
+
     try {
-      const { data: me, error: meError } = await supabase
-        .from('profiles')
-        .select('latitude, longitude')
-        .eq('id', meId)
-        .maybeSingle();
-
-      if (!isMountedRef.current) return;
-
-      if (meError || !me || me.latitude == null || me.longitude == null) {
-        // No location on file for the current user — nothing to
-        // compute proximity against, so just show nothing quietly.
-        setNearby([]);
-        setLoading(false);
+      // 1) Joylashuvga ruxsat so'raymiz — bu qism avval umuman yo'q edi,
+      //    shuning uchun `profiles.latitude/longitude` hech qachon
+      //    to'ldirilmagan va nearby ro'yxati doim bo'sh chiqqan.
+      const { status: permStatus } = await Location.requestForegroundPermissionsAsync();
+      if (permStatus !== 'granted') {
+        if (isMountedRef.current) {
+          setPermissionDenied(true);
+          setLoading(false);
+        }
         return;
       }
 
+      // 2) Joriy koordinatani olamiz.
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      if (!isMountedRef.current) return;
+
+      const myLat = pos.coords.latitude;
+      const myLng = pos.coords.longitude;
+
+      // 3) O'z profilimizga lat/lng ni yozib/yangilab qo'yamiz, shunda
+      //    boshqalar ham bizni "nearby" sifatida topa oladi.
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update({ latitude: myLat, longitude: myLng })
+        .eq('id', meId);
+
+      if (updateError) {
+        console.error('profiles location update error:', updateError);
+      }
+
+      // 4) Atrofdagi profillar va do'stlik holatlarini olamiz.
       const RADIUS_KM = 50;
-      const box = boundingBox(me.latitude, me.longitude, RADIUS_KM);
+      const box = boundingBox(myLat, myLng, RADIUS_KM);
 
       const [{ data: candidates, error: candError }, { data: friendRows, error: friendError }] =
         await Promise.all([
@@ -199,7 +230,7 @@ const NearbySuggestions: React.FC<{
           emoji: c.emoji ?? '🙂',
           avatarColor: c.avatar_color ?? colors.primary,
           avatarUrl: c.avatar_url ?? undefined,
-          distanceKm: haversineKm(me.latitude as number, me.longitude as number, c.latitude as number, c.longitude as number),
+          distanceKm: haversineKm(myLat, myLng, c.latitude as number, c.longitude as number),
         }))
         .filter((c) => c.distanceKm <= RADIUS_KM)
         .sort((a, b) => a.distanceKm - b.distanceKm)
@@ -246,6 +277,15 @@ const NearbySuggestions: React.FC<{
         <>
           {loading ? (
             <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.sm }} />
+          ) : permissionDenied ? (
+            <View>
+              <Text style={styles.empty}>
+                Yaqin atrofdagilarni ko'rish uchun joylashuvga ruxsat bering.
+              </Text>
+              <TouchableOpacity onPress={load} style={styles.retryBtn}>
+                <Text style={styles.retryText}>Qayta urinish</Text>
+              </TouchableOpacity>
+            </View>
           ) : error ? (
             <View>
               <Text style={styles.empty}>{error}</Text>

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { supabase } from '../../utils/supabase';
@@ -14,6 +14,7 @@ interface SuggestedPerson {
   username: string | null;
   avatar_emoji: string;
   avatar_color: string;
+  avatar_url: string | null;
 }
 
 interface Props {
@@ -40,9 +41,12 @@ const OnboardingFollowScreen: React.FC<Props> = ({ onBack, onFinish }) => {
     // va joriy foydalanuvchidan tashqari hammani ko'rsatuvchi view.
     // Onboarding bosqichida hali joylashuv ruxsati so'ralmagani uchun
     // eng yangi qo'shilgan / eng ko'p do'stga ega profillarni tavsiya qilamiz.
+    // NOTE (fix): `avatar_url` ham so'rovga qo'shildi — avval faqat
+    // emoji/color kelib, foydalanuvchining haqiqiy profil rasmi hech
+    // qachon ko'rsatilmasdi.
     let query = supabase
       .from('discoverable_profiles')
-      .select('id, full_name, username, avatar_emoji, avatar_color')
+      .select('id, full_name, username, avatar_emoji, avatar_color, avatar_url')
       .limit(12);
 
     if (userId) {
@@ -129,7 +133,11 @@ const OnboardingFollowScreen: React.FC<Props> = ({ onBack, onFinish }) => {
                 activeOpacity={0.85}
               >
                 <View>
-                  <Avatar emoji={p.avatar_emoji || '🙂'} color={p.avatar_color || colors.primary} size={56} />
+                  {p.avatar_url ? (
+                    <Image source={{ uri: p.avatar_url }} style={styles.avatarImage} resizeMode="cover" />
+                  ) : (
+                    <Avatar emoji={p.avatar_emoji || '🙂'} color={p.avatar_color || colors.primary} size={56} />
+                  )}
                   {isSelected && (
                     <View style={styles.checkBadge}>
                       <Ionicons name="checkmark" size={12} color={colors.bg} />
@@ -172,6 +180,12 @@ const makeStyles = (colors: ColorScheme) =>
     personCardSelected: {
       borderColor: colors.primary,
       backgroundColor: colors.primary + '14',
+    },
+    avatarImage: {
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      backgroundColor: colors.cardAlt,
     },
     checkBadge: {
       position: 'absolute',
