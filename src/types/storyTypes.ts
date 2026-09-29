@@ -31,6 +31,62 @@ export type StoryLocationSticker = {
   y: number;
 };
 
+// ---------------------------------------------------------------------
+// YANGI: kengaytirilgan stikerlar (composer + viewer ikkalasi ishlatadi)
+// x, y = stiker MARKAZI (0..1). extra_stickers.v === 2 bo'lsa markaz bo'yicha,
+// bo'lmasa (eski storylar) chap-yuqori burchak bo'yicha joylashtiriladi.
+// ---------------------------------------------------------------------
+
+export type StoryPrivacy = 'public' | 'close_friends';
+
+export interface BaseSticker {
+  id: string;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+}
+export interface StoryPollSticker extends BaseSticker {
+  question: string;
+  optionA: string;
+  optionB: string;
+}
+export interface StoryQuestionSticker extends BaseSticker {
+  prompt: string;
+}
+export interface StoryMusicSticker extends BaseSticker {
+  trackId: string;
+  title: string;
+  artist: string;
+}
+export interface StoryLinkSticker extends BaseSticker {
+  url: string;
+  label: string;
+}
+export interface StoryCountdownSticker extends BaseSticker {
+  title: string;
+  endsAt: string; // ISO
+}
+export type StoryLocationStickerEx = StoryLocationSticker & {
+  latitude?: number;
+  longitude?: number;
+};
+export interface MusicTrack {
+  id: string;
+  title: string;
+  artist: string;
+}
+
+/** stories.extra_stickers (jsonb) ustuniga yoziladi */
+export type StoryExtraStickers = {
+  v: 2;
+  poll: StoryPollSticker[];
+  question: StoryQuestionSticker[];
+  music: StoryMusicSticker[];
+  link: StoryLinkSticker[];
+  countdown: StoryCountdownSticker[];
+};
+
 export type StoryRow = {
   [x: string]: any;
   id: string;
@@ -48,6 +104,12 @@ export type StoryRow = {
   location_label?: string | null;
   location_x?: number | null;
   location_y?: number | null;
+  // yangi ustunlar
+  privacy?: StoryPrivacy;
+  duration_sec?: number | null;
+  location_lat?: number | null;
+  location_lng?: number | null;
+  extra_stickers?: StoryExtraStickers | null;
 };
 
 export type FriendStoryGroup = {
@@ -123,13 +185,9 @@ export const STORY_TEXT_COLORS = [
   '#FFFFFF', '#000000', '#FF3B5C', '#FFD93D', '#4ADE80', '#38BDF8', '#A78BFA', '#FB923C',
 ];
 
-/**
- * Additions to types/storyTypes.ts to support:
- *  - showing who posted the story (poster identity on the frame)
- *  - showing the viewer count (only visible to the poster, i.e. group.isMine)
- *
- * Merge these into the existing storyTypes.ts file.
- */
+// ---------------------------------------------------------------------
+// Viewer list (faqat story egasi ko'radi)
+// ---------------------------------------------------------------------
 
 export type StoryViewerEntry = {
   id: string;
@@ -140,13 +198,10 @@ export type StoryViewerEntry = {
   viewedAt: string; // ISO timestamp
 };
 
-// Extend StoryRow (already existing) with a denormalized viewer_count
-// column so the UI can render it instantly without a join, plus poster
-// display fields resolved from the profiles table.
 export type StoryRowExtras = {
   viewer_count: number;
   poster_name: string;
   poster_emoji?: string | null;
   poster_color?: string | null;
-  created_at: string; // ISO timestamp, used for "2h ago" style labels
+  created_at: string;
 };
