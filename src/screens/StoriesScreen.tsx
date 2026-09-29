@@ -12,6 +12,8 @@ import {
   TextInput,
   FlatList,
   Platform,
+  RefreshControl,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView, SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -26,6 +28,9 @@ import {
   UserPlus,
   Heart,
   UserCheck,
+  Clock,
+  Check,
+  X,
   MoreHorizontal,
   Trash2,
   BookmarkPlus,
@@ -33,7 +38,7 @@ import {
   Play,
 } from 'lucide-react-native';
 import { useTheme } from '../context/ThemeContext';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { radius, spacing, typography } from '../theme/theme';
 import type { ColorScheme } from '../theme/theme';
 import Avatar from '../components/Avatar';
@@ -55,12 +60,35 @@ import {
 } from '../types/storyTypes';
 
 // ---------------------------------------------------------------------
-// Helpers
+// Constants & helpers
 // ---------------------------------------------------------------------
 
-// "2m", "3h", "5d" style relative time used in the notifications list.
-// Kept local to this file since it's only needed here; move to a
-// shared utils/date.ts if another screen needs it too.
+const FILL = { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } as const;
+
+const HIGHLIGHT_COLUMNS = 4;
+const HIGHLIGHT_ASPECT = 0.68; // width / height
+
+const MIME_BY_EXT: Record<string, string> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  heic: 'image/heic',
+  heif: 'image/heif',
+  mp4: 'video/mp4',
+  m4v: 'video/x-m4v',
+  mov: 'video/quicktime',
+};
+
+// iOS: a RN <Modal> that is still dismissing will silently refuse to
+// present another Modal / Alert. Anything that must appear right after
+// a modal closes goes through this helper.
+const afterModalClose = (fn: () => void) => {
+  setTimeout(fn, Platform.OS === 'ios' ? 450 : 50);
+};
+
+// "2m", "3h", "5d" style relative time.
 const timeAgo = (iso?: string | null): string => {
   if (!iso) return '';
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -78,30 +106,42 @@ const timeAgo = (iso?: string | null): string => {
   if (week < 5) return `${week}w`;
   const month = Math.floor(day / 30);
   if (month < 12) return `${month}mo`;
-  const year = Math.floor(day / 365);
-  return `${year}y`;
+  return `${Math.floor(day / 365)}y`;
 };
 
-// Safely derives a file extension for uploaded media.
-//
-// expo-image-picker returns a "blob:" URI on web (no real file
-// extension present in the string), so naively doing
-// `uri.split('.').pop()` can pull the entire blob URL in as the
-// "extension" and corrupt the resulting storage path/public URL.
-// This falls back to a sane default whenever the URI isn't a normal
-// file-style path, or when whatever comes after the last dot doesn't
-// look like a real extension.
-const getSafeExt = (rawUri: string, mediaType: 'image' | 'video'): string => {
+// Safe file extension (blob:/data: URIs on web have no real extension).
+const getSafeExt = (rawUri: string, mediaType: 'image' | 'video', mimeType?: string | null): string => {
   const fallback = mediaType === 'video' ? 'mp4' : 'jpg';
   if (rawUri.startsWith('blob:') || rawUri.startsWith('data:')) {
+    const sub = mimeType?.split('/')[1]?.toLowerCase();
+    if (sub === 'quicktime') return 'mov';
+    if (sub === 'jpeg') return 'jpg';
+    if (sub && /^[a-z0-9]{2,5}$/.test(sub)) return sub;
     return fallback;
   }
-  const last = rawUri.split('.').pop();
-  if (!last || last.length > 5 || !/^[a-zA-Z0-9]+$/.test(last)) {
-    return fallback;
-  }
+  const clean = rawUri.split('?')[0];
+  const last = clean.split('.').pop();
+  if (!last || last.length > 5 || !/^[a-zA-Z0-9]+$/.test(last)) return fallback;
   return last.toLowerCase();
 };
+
+const readUriAsArrayBuffer = async (uri: string): Promise<ArrayBuffer> => {
+  if (Platform.OS === 'web' || uri.startsWith('blob:') || uri.startsWith('data:')) {
+    const res = await fetch(uri);
+    return res.arrayBuffer();
+  }
+  const file = new FileSystem.File(uri);
+  const base64 = await file.base64();
+  return decode(base64);
+};
+
+type NotifItem = NotificationRow & {
+  created_at?: string | null;
+  actor_avatar_url?: string | null;
+  story_id?: string | null;
+};
+
+type FriendState = 'accepted' | 'pending_out' | 'pending_in';
 
 // ---------------------------------------------------------------------
 // Screen
@@ -111,19 +151,21 @@ const StoriesScreen: React.FC = () => {
   const { friends, refresh: refreshFriends } = useConnectedFriends();
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
-
+  const { width: screenWidth } = useWindowDimensions();
   const navigation = useNavigation<any>();
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [myStories, setMyStories] = useState<StoryRow[]>([]);
   const [friendStories, setFriendStories] = useState<StoryRow[]>([]);
-  const [expiredMyStories, setExpiredMyStories] = useState<StoryRow[]>([]);
-  const [highlights, setHighlights] = useState<HighlightGroup[]>([]);
-  const [notifications, setNotifications] = useState<NotificationRow[]>([]);
+  const [archive, setArchive] = useState<StoryRow[]>([]);
+  const [highlightRows, setHighlightRows] = useState<StoryRow[]>([]);
+  const [notifications, setNotifications] = useState<NotifItem[]>([]);
   const [viewedIds, setViewedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [highlightsLoading, setHighlightsLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [failedCovers, setFailedCovers] = useState<Set<string>>(new Set());
 
   const [activeGroup, setActiveGroup] = useState<FriendStoryGroup | null>(null);
   const [activeHighlight, setActiveHighlight] = useState<HighlightGroup | null>(null);
@@ -133,39 +175,39 @@ const StoriesScreen: React.FC = () => {
   const [addHighlightOpen, setAddHighlightOpen] = useState(false);
   const [composerUri, setComposerUri] = useState<string | null>(null);
   const [composerType, setComposerType] = useState<'image' | 'video'>('image');
+  const [composerMime, setComposerMime] = useState<string | null>(null);
 
-  // One-time mount log — moved into an effect so it fires once per
-  // real mount instead of on every re-render (it was previously in
-  // the render body, which is why the terminal showed it 8-9 times).
-  useEffect(() => {
-    console.log('[DEBUG] StoriesScreen mounted, Platform:', Platform.OS);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = useCallback((message: string) => {
+    setToast(message);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2200);
   }, []);
 
-  // Step 1: resolve the current auth user reliably.
-  //
-  // FIX: `supabase.auth.getUser()` makes a network round-trip to
-  // validate the token and can resolve *before* the underlying
-  // PostgREST client has the Authorization header fully attached for
-  // the very next query — this caused `loadHighlights()`'s first call
-  // to run as if unauthenticated (RLS silently returned 0 rows), and
-  // only a later call (e.g. triggered by the realtime subscription)
-  // would return the correct data. We now read the session
-  // synchronously via `getSession()` (backed by local storage, no
-  // network wait) and also listen to `onAuthStateChange`, which is the
-  // pattern Supabase recommends for driving app state off auth.
+  // Request counters: only the newest response of each loader may write
+  // state, so a slow/stale response can never overwrite fresh data.
+  const seq = useRef({ stories: 0, highlights: 0, archive: 0, notifs: 0, views: 0 });
+
+  // ------------------------------------------------------------
+  // Auth
+  // ------------------------------------------------------------
   useEffect(() => {
     let mounted = true;
 
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
       const userId = data.session?.user?.id ?? null;
-      setCurrentUserId((prevId) => (prevId !== userId ? userId : prevId));
+      setCurrentUserId(userId);
+      if (!userId) {
+        setLoading(false);
+        setHighlightsLoading(false);
+      }
     });
 
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
-      const userId = session?.user?.id ?? null;
-      setCurrentUserId((prevId) => (prevId !== userId ? userId : prevId));
+      setCurrentUserId(session?.user?.id ?? null);
     });
 
     return () => {
@@ -174,9 +216,6 @@ const StoriesScreen: React.FC = () => {
     };
   }, []);
 
-  // Opens ContactProfileScreen for a given user id, optionally seeded
-  // with preview fields (from a search result or notification actor) so
-  // the screen doesn't flash "not connected" while it re-fetches.
   const openContactProfile = useCallback(
     (
       userId: string,
@@ -194,210 +233,222 @@ const StoriesScreen: React.FC = () => {
     [navigation]
   );
 
-  // -------------------------------------------------------------
-  // Load stories (non-highlight, unexpired), likes, highlights,
-  // views, and notifications.
-  // -------------------------------------------------------------
+  // ------------------------------------------------------------
+  // Loaders
+  // ------------------------------------------------------------
   const loadStories = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('stories')
-      .select('*, story_likes(count)')
-      .gt('expires_at', new Date().toISOString())
-      .eq('is_highlight', false)
-      .order('created_at', { ascending: true });
+    if (!currentUserId) return;
+    const id = ++seq.current.stories;
 
-    if (error || !data) {
+    const [storiesRes, likedRes] = await Promise.all([
+      supabase
+        .from('stories')
+        .select('*, story_likes(count)')
+        .gt('expires_at', new Date().toISOString())
+        .eq('is_highlight', false)
+        .order('created_at', { ascending: true }),
+      supabase.from('story_likes').select('story_id').eq('user_id', currentUserId),
+    ]);
+
+    if (id !== seq.current.stories) return;
+
+    if (storiesRes.error || !storiesRes.data) {
+      console.error('loadStories error:', storiesRes.error?.message);
       setLoading(false);
       return;
     }
 
-    let myLikedIds = new Set<string>();
-    if (currentUserId) {
-      const { data: likedRows } = await supabase
-        .from('story_likes')
-        .select('story_id')
-        .eq('user_id', currentUserId);
-      if (likedRows) myLikedIds = new Set(likedRows.map((r: any) => r.story_id));
-    }
+    const myLikedIds = new Set<string>((likedRes.data ?? []).map((r: any) => r.story_id));
 
-    const withLikes = (data as any[]).map((s) => ({
+    const withLikes = (storiesRes.data as any[]).map((s) => ({
       ...s,
       like_count: Array.isArray(s.story_likes) ? s.story_likes[0]?.count ?? 0 : 0,
       liked_by_me: myLikedIds.has(s.id),
     })) as StoryRow[];
 
-    // Owner-based split: a user's own stories only ever populate
-    // "My story"; everyone else's populate the "Friends" row. RLS on
-    // the `stories` table (see SQL) already restricts what rows this
-    // query can even see (self + accepted friends), so this split is
-    // just a UI grouping on top of an already-scoped result set.
-    const mine = withLikes.filter((s) => s.owner_id === currentUserId);
-    const others = withLikes.filter((s) => s.owner_id !== currentUserId);
-    setMyStories(mine);
-    setFriendStories(others);
+    setMyStories(withLikes.filter((s) => s.owner_id === currentUserId));
+    setFriendStories(withLikes.filter((s) => s.owner_id !== currentUserId));
     setLoading(false);
   }, [currentUserId]);
 
-  // Expired (24h+) stories of mine that are NOT already saved as a
-  // highlight — these are the candidates offered in the "Add to
-  // highlights" picker, same as Instagram's "Archive" source list.
-  const loadExpiredMyStories = useCallback(async () => {
+  // All my non-highlight stories (active + expired) — source list for
+  // the "New highlight" picker.
+  const loadArchive = useCallback(async () => {
     if (!currentUserId) return;
+    const id = ++seq.current.archive;
     const { data, error } = await supabase
       .from('stories')
       .select('*')
       .eq('owner_id', currentUserId)
       .eq('is_highlight', false)
-      .lte('expires_at', new Date().toISOString())
       .order('created_at', { ascending: false })
-      .limit(60);
-    if (error || !data) return;
-    setExpiredMyStories(data as StoryRow[]);
+      .limit(100);
+    if (id !== seq.current.archive) return;
+    if (error || !data) {
+      console.error('loadArchive error:', error?.message);
+      return;
+    }
+    setArchive(data as StoryRow[]);
   }, [currentUserId]);
 
   const loadHighlights = useCallback(async () => {
-    if (!currentUserId) {
-      return;
-    }
-    setHighlightsLoading(true);
-
+    if (!currentUserId) return;
+    const id = ++seq.current.highlights;
     const { data, error } = await supabase
       .from('stories')
       .select('*')
       .eq('owner_id', currentUserId)
       .eq('is_highlight', true)
       .order('created_at', { ascending: true });
-
+    if (id !== seq.current.highlights) return;
     if (error) {
       console.error('loadHighlights error:', error.code, error.message);
       setHighlightsLoading(false);
       return;
     }
-    if (!data) {
-      setHighlightsLoading(false);
-      return;
-    }
-
-    const byTitle = new Map<string, StoryRow[]>();
-    (data as StoryRow[]).forEach((s) => {
-      const key = s.highlight_title ?? 'Highlight';
-      const list = byTitle.get(key) ?? [];
-      list.push(s);
-      byTitle.set(key, list);
-    });
-
-    const groups: HighlightGroup[] = Array.from(byTitle.entries()).map(([title, stories]) => ({
-      id: title,
-      title,
-      coverUrl: stories[0].media_url,
-      stories,
-    }));
-
-    setHighlights(groups);
+    setHighlightRows((data ?? []) as StoryRow[]);
     setHighlightsLoading(false);
   }, [currentUserId]);
 
   const loadViewedIds = useCallback(async () => {
     if (!currentUserId) return;
-    const { data } = await supabase
-      .from('story_views')
-      .select('story_id')
-      .eq('viewer_id', currentUserId);
+    const id = ++seq.current.views;
+    const { data } = await supabase.from('story_views').select('story_id').eq('viewer_id', currentUserId);
+    if (id !== seq.current.views) return;
     if (data) setViewedIds(new Set(data.map((r: { story_id: string }) => r.story_id)));
   }, [currentUserId]);
 
-  // -----------------------------------------------------------------
-  // Notifications
-  //
-  // DATA-INTEGRITY NOTE: `notifications.actor_id` is a FK to
-  // `profiles(id)` (see `notifications_actor_id_fkey` below), so any
-  // row written through the app's normal code paths is guaranteed to
-  // carry a real profiles.id. If you still see ContactProfileScreen's
-  // "params.userId was actually a friendships.id" warning after
-  // opening a notification, that row's actor_id was written *before*
-  // this FK was in place (e.g. by an old build, or by seed.ts using
-  // the wrong id) — it's bad legacy data, not a bug in this screen.
-  // Run the repair migration in the SQL notes to fix existing rows;
-  // no new writes should ever hit this path with the FK enforced.
-  // -----------------------------------------------------------------
   const loadNotifications = useCallback(async () => {
     if (!currentUserId) return;
+    const id = ++seq.current.notifs;
     const { data, error } = await supabase
       .from('notifications')
-      .select('*, actor:profiles!notifications_actor_id_fkey(avatar_url)')
+      .select('*, actor:profiles!notifications_actor_id_fkey(name, username, emoji, avatar_color, avatar_url)')
       .eq('recipient_id', currentUserId)
       .order('created_at', { ascending: false })
-      .limit(30);
+      .limit(50);
+    if (id !== seq.current.notifs) return;
     if (error) {
       console.error('loadNotifications error:', error.message);
       return;
     }
-    if (data) {
-      const withAvatar = (data as any[]).map((n) => ({
-        ...n,
-        actor_avatar_url: n.actor?.avatar_url ?? null,
-      }));
-      setNotifications(withAvatar as NotificationRow[]);
-    }
-  }, [currentUserId]);
+    const normalized = ((data ?? []) as any[]).map((n) => ({
+      ...n,
+      actor_name: n.actor?.name ?? n.actor_name ?? 'Someone',
+      actor_emoji: n.actor?.emoji ?? n.actor_emoji ?? '🙂',
+      actor_color: n.actor?.avatar_color ?? n.actor_color ?? colors.primary,
+      actor_avatar_url: n.actor?.avatar_url ?? null,
+    }));
+    setNotifications(normalized as NotifItem[]);
+  }, [currentUserId, colors.primary]);
 
-  // Step 2: once we actually know who the user is, load everything
-  // that depends on currentUserId. Previously this ran in a `[]`
-  // effect, so on first mount it fired with currentUserId still null
-  // (auth hadn't resolved yet) and never re-ran when the id arrived.
+  // Highlights grouped by title (derived — no extra state to desync).
+  const highlights: HighlightGroup[] = useMemo(() => {
+    const byTitle = new Map<string, StoryRow[]>();
+    highlightRows.forEach((s) => {
+      const key = s.highlight_title ?? 'Highlight';
+      const list = byTitle.get(key) ?? [];
+      list.push(s);
+      byTitle.set(key, list);
+    });
+    return Array.from(byTitle.entries()).map(([title, stories]) => {
+      // Prefer an image as the cover — an <Image> cannot render a video URL.
+      const cover = stories.find((s) => s.media_type !== 'video');
+      return { id: title, title, coverUrl: cover?.media_url ?? '', stories };
+    });
+  }, [highlightRows]);
+
+  const highlightedUrls = useMemo(() => new Set(highlightRows.map((s) => s.media_url)), [highlightRows]);
+  const highlightCandidates = useMemo(
+    () => archive.filter((s) => !highlightedUrls.has(s.media_url)),
+    [archive, highlightedUrls]
+  );
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([loadStories(), loadViewedIds(), loadHighlights(), loadNotifications(), loadArchive()]);
+  }, [loadStories, loadViewedIds, loadHighlights, loadNotifications, loadArchive]);
+
+  // Runs on mount, when the user id arrives, and every time the tab is
+  // focused again (so iOS tab switches always show fresh data).
+  useFocusEffect(
+    useCallback(() => {
+      if (currentUserId) refreshAll();
+    }, [currentUserId, refreshAll])
+  );
+
+  const onPullRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([refreshAll(), Promise.resolve(refreshFriends?.())]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshAll, refreshFriends]);
+
+  // ------------------------------------------------------------
+  // Realtime (debounced, re-subscribed only when the user changes)
+  // ------------------------------------------------------------
+  const loadersRef = useRef({
+    loadStories,
+    loadHighlights,
+    loadArchive,
+    loadNotifications,
+    refreshFriends,
+  });
+  useEffect(() => {
+    loadersRef.current = { loadStories, loadHighlights, loadArchive, loadNotifications, refreshFriends };
+  }, [loadStories, loadHighlights, loadArchive, loadNotifications, refreshFriends]);
+
   useEffect(() => {
     if (!currentUserId) return;
-    loadStories();
-    loadViewedIds();
-    loadHighlights();
-    loadNotifications();
-    loadExpiredMyStories();
-  }, [currentUserId, loadStories, loadViewedIds, loadHighlights, loadNotifications, loadExpiredMyStories]);
+    const timers: Record<string, ReturnType<typeof setTimeout>> = {};
+    const schedule = (key: string, fn: () => void) => {
+      if (timers[key]) clearTimeout(timers[key]);
+      timers[key] = setTimeout(fn, 250);
+    };
 
-  // Step 3: realtime subscription — set up once, independent of
-  // currentUserId, and always use the latest callbacks via refs so we
-  // don't need to resubscribe every time currentUserId changes.
-  const loadStoriesRef = useRef(loadStories);
-  const loadHighlightsRef = useRef(loadHighlights);
-  const loadExpiredMyStoriesRef = useRef(loadExpiredMyStories);
-  const loadNotificationsRef = useRef(loadNotifications);
-  const refreshFriendsRef = useRef(refreshFriends);
-
-  useEffect(() => {
-    loadStoriesRef.current = loadStories;
-    loadHighlightsRef.current = loadHighlights;
-    loadExpiredMyStoriesRef.current = loadExpiredMyStories;
-    loadNotificationsRef.current = loadNotifications;
-    refreshFriendsRef.current = refreshFriends;
-  }, [loadStories, loadHighlights, loadExpiredMyStories, loadNotifications, refreshFriends]);
-
-  useEffect(() => {
     const channel = supabase
-      .channel('stories-feed')
+      .channel(`stories-feed-${currentUserId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stories' }, () => {
-        loadStoriesRef.current();
-        loadHighlightsRef.current();
-        loadExpiredMyStoriesRef.current();
+        schedule('stories', () => {
+          loadersRef.current.loadStories();
+          loadersRef.current.loadHighlights();
+          loadersRef.current.loadArchive();
+        });
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'story_likes' }, () => {
-        loadStoriesRef.current();
+        schedule('likes', () => loadersRef.current.loadStories());
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => {
-        loadNotificationsRef.current();
-      })
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'notifications', filter: `recipient_id=eq.${currentUserId}` },
+        () => schedule('notifs', () => loadersRef.current.loadNotifications())
+      )
       .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, () => {
-        loadStoriesRef.current();
-        if (typeof refreshFriendsRef.current === 'function') {
-          refreshFriendsRef.current();
-        }
+        schedule('friends', () => {
+          loadersRef.current.loadStories();
+          loadersRef.current.loadNotifications();
+          if (typeof loadersRef.current.refreshFriends === 'function') loadersRef.current.refreshFriends();
+        });
       })
       .subscribe();
 
     return () => {
+      Object.values(timers).forEach(clearTimeout);
       supabase.removeChannel(channel);
     };
-  }, []); // subscribe exactly once
+  }, [currentUserId]);
 
+  useEffect(
+    () => () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    },
+    []
+  );
+
+  // ------------------------------------------------------------
+  // Derived data
+  // ------------------------------------------------------------
   const groups: FriendStoryGroup[] = useMemo(() => {
     const byFriend = new Map<string, StoryRow[]>();
     friendStories.forEach((s) => {
@@ -420,32 +471,38 @@ const StoriesScreen: React.FC = () => {
         allViewed: stories.every((s) => viewedIds.has(s.id)),
       });
     });
-
     return result.sort((a, b) => Number(a.allViewed) - Number(b.allViewed));
   }, [friendStories, friends, viewedIds]);
 
-  const unreadNotifCount = useMemo(
-    () => notifications.filter((n) => !n.read).length,
-    [notifications]
-  );
+  const friendIds = useMemo(() => new Set<string>((friends ?? []).map((f: any) => f.id)), [friends]);
+  const unreadNotifCount = useMemo(() => notifications.filter((n) => !n.read).length, [notifications]);
 
+  // Highlight tile geometry — explicit pixels (no % width + aspectRatio),
+  // which is what Yoga on iOS resolves unreliably inside a wrapped row.
+  const highlightWidth = Math.floor(
+    (screenWidth - spacing.lg * 2 - spacing.sm * (HIGHLIGHT_COLUMNS - 1)) / HIGHLIGHT_COLUMNS
+  );
+  const highlightHeight = Math.round(highlightWidth / HIGHLIGHT_ASPECT);
+
+  // ------------------------------------------------------------
+  // Actions
+  // ------------------------------------------------------------
   const handlePickMedia = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
       Alert.alert('Permission needed', 'Please allow access to your photo library.');
       return;
     }
-
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images', 'videos'],
       quality: 0.8,
       allowsEditing: false,
     });
-
     if (result.canceled || !result.assets?.[0]?.uri) return;
 
     const asset = result.assets[0];
     setComposerType(asset.type === 'video' ? 'video' : 'image');
+    setComposerMime(asset.mimeType ?? null);
     setComposerUri(asset.uri);
   };
 
@@ -459,61 +516,47 @@ const StoriesScreen: React.FC = () => {
       locationSticker: StoryLocationSticker | null;
     }
   ) => {
-    if (!currentUserId) return;
+    if (!currentUserId || uploading) return;
     setUploading(true);
+    let uploadedPath: string | null = null;
     try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-      if (userError || !user) {
-        throw new Error('Session topilmadi, qayta login qiling.');
-      }
-      const ownerId = user.id;
+      const caption = (payload.caption ?? '').trim();
+      const ext = getSafeExt(uri, mediaType, composerMime);
+      const path = `${currentUserId}/${Date.now()}.${ext}`;
+      const contentType =
+        composerMime && composerMime.includes('/') && composerMime !== 'image/jpg'
+          ? composerMime
+          : MIME_BY_EXT[ext] ?? (mediaType === 'video' ? 'video/mp4' : 'image/jpeg');
 
-      const caption = payload.caption ?? '';
-      const fileExt = getSafeExt(uri, mediaType);
-      const fileName = `${ownerId}/${Date.now()}.${fileExt}`;
-
-      const file = new FileSystem.File(uri);
-      const base64 = await file.base64();
-      const arrayBuffer = decode(base64);
-
+      const arrayBuffer = await readUriAsArrayBuffer(uri);
       const { error: uploadError } = await supabase.storage
         .from('story-media')
-        .upload(fileName, arrayBuffer, {
-          contentType: mediaType === 'video' ? `video/${fileExt}` : `image/${fileExt}`,
-        });
-
+        .upload(path, arrayBuffer, { contentType });
       if (uploadError) throw uploadError;
+      uploadedPath = path;
 
-      const { data: publicUrlData } = supabase.storage.from('story-media').getPublicUrl(fileName);
+      const { data: publicUrlData } = supabase.storage.from('story-media').getPublicUrl(path);
 
       const { data: inserted, error: insertError } = await supabase
         .from('stories')
-        .insert([
-          {
-            owner_id: ownerId,
-            media_url: publicUrlData.publicUrl,
-            media_type: mediaType,
-            caption: caption.trim() ? caption.trim() : null,
-            expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-            is_highlight: false,
-            text_stickers: payload.textStickers,
-            location_label: payload.locationSticker?.label ?? null,
-            location_x: payload.locationSticker?.x ?? null,
-            location_y: payload.locationSticker?.y ?? null,
-          },
-        ])
+        .insert({
+          owner_id: currentUserId,
+          media_url: publicUrlData.publicUrl,
+          media_type: mediaType,
+          caption: caption || null,
+          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          is_highlight: false,
+          text_stickers: payload.textStickers ?? [],
+          location_label: payload.locationSticker?.label ?? null,
+          location_x: payload.locationSticker?.x ?? null,
+          location_y: payload.locationSticker?.y ?? null,
+        })
         .select('id')
         .single();
-
-      if (insertError) {
-        throw insertError;
-      }
+      if (insertError) throw insertError;
 
       if (inserted && payload.mentionStickers.length > 0) {
-        await supabase.from('story_mentions').insert(
+        const { error: mentionError } = await supabase.from('story_mentions').insert(
           payload.mentionStickers.map((m) => ({
             story_id: inserted.id,
             friend_id: m.friendId,
@@ -521,10 +564,22 @@ const StoriesScreen: React.FC = () => {
             y: m.y,
           }))
         );
+        if (mentionError) console.error('story_mentions insert error:', mentionError.message);
       }
+
+      uploadedPath = null; // success — keep the file
+      setComposerUri(null);
+      showToast('Story posted');
+      loadStories();
+      loadArchive();
     } catch (err) {
       console.error('Story upload error:', err);
-      const message = err instanceof Error ? err.message : JSON.stringify(err);
+      if (uploadedPath) {
+        // Insert failed after upload: don't leave an orphan file behind.
+        supabase.storage.from('story-media').remove([uploadedPath]).catch(() => {});
+      }
+      const message =
+        err instanceof Error ? err.message : (err as any)?.message ?? JSON.stringify(err);
       Alert.alert('Error', `Upload failed: ${message}`);
     } finally {
       setUploading(false);
@@ -533,12 +588,18 @@ const StoriesScreen: React.FC = () => {
 
   const markViewed = useCallback(
     async (storyId: string) => {
-      if (viewedIds.has(storyId) || !currentUserId) return;
+      if (!currentUserId || viewedIds.has(storyId)) return;
       setViewedIds((prev) => new Set(prev).add(storyId));
+      // upsert + ignoreDuplicates: re-viewing never errors (needs the
+      // unique index from the SQL file).
       const { error } = await supabase
         .from('story_views')
-        .insert({ story_id: storyId, viewer_id: currentUserId });
+        .upsert(
+          { story_id: storyId, viewer_id: currentUserId },
+          { onConflict: 'story_id,viewer_id', ignoreDuplicates: true }
+        );
       if (error) {
+        console.error('markViewed error:', error.message);
         setViewedIds((prev) => {
           const next = new Set(prev);
           next.delete(storyId);
@@ -549,23 +610,80 @@ const StoriesScreen: React.FC = () => {
     [viewedIds, currentUserId]
   );
 
+  // Called when the notifications modal is closed (not opened), so the
+  // unread highlight stays visible while the user reads the list.
   const markAllNotifsRead = useCallback(async () => {
     if (!currentUserId) return;
+    if (!notifications.some((n) => !n.read)) return;
     const previous = notifications;
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     const { error } = await supabase
       .from('notifications')
       .update({ read: true })
-      .eq('recipient_id', currentUserId);
+      .eq('recipient_id', currentUserId)
+      .eq('read', false);
     if (error) {
+      console.error('markAllNotifsRead error:', error.message);
       setNotifications(previous);
     }
   }, [currentUserId, notifications]);
 
+  const closeNotifications = useCallback(() => {
+    setNotifOpen(false);
+    markAllNotifsRead();
+  }, [markAllNotifsRead]);
+
+  const removeNotification = useCallback(async (notifId: string) => {
+    setNotifications((prev) => prev.filter((n) => n.id !== notifId));
+    const { error } = await supabase.from('notifications').delete().eq('id', notifId);
+    if (error) console.error('removeNotification error:', error.message);
+  }, []);
+
+  const acceptFriendRequest = useCallback(
+    async (n: NotifItem) => {
+      if (!currentUserId) return;
+      const { error } = await supabase
+        .from('friendships')
+        .update({ status: 'accepted' })
+        .eq('user_id', (n as any).actor_id)
+        .eq('friend_id', currentUserId)
+        .eq('status', 'pending');
+      if (error) {
+        console.error('acceptFriendRequest error:', error.message);
+        showToast('Could not accept the request');
+        return;
+      }
+      await removeNotification(n.id);
+      if (typeof refreshFriends === 'function') refreshFriends();
+      loadStories();
+      showToast(`You and ${n.actor_name} are now friends`);
+    },
+    [currentUserId, removeNotification, refreshFriends, loadStories, showToast]
+  );
+
+  const declineFriendRequest = useCallback(
+    async (n: NotifItem) => {
+      if (!currentUserId) return;
+      const { error } = await supabase
+        .from('friendships')
+        .delete()
+        .eq('user_id', (n as any).actor_id)
+        .eq('friend_id', currentUserId)
+        .eq('status', 'pending');
+      if (error) {
+        console.error('declineFriendRequest error:', error.message);
+        showToast('Could not decline the request');
+        return;
+      }
+      await removeNotification(n.id);
+    },
+    [currentUserId, removeNotification, showToast]
+  );
+
   const toggleLike = useCallback(
     async (story: StoryRow) => {
       if (!currentUserId) return;
-      const alreadyLiked = story.liked_by_me;
+      const alreadyLiked = !!story.liked_by_me;
 
       const patch = (list: StoryRow[]) =>
         list.map((s) =>
@@ -573,36 +691,42 @@ const StoriesScreen: React.FC = () => {
             ? {
                 ...s,
                 liked_by_me: !alreadyLiked,
-                like_count: (s.like_count ?? 0) + (alreadyLiked ? -1 : 1),
+                like_count: Math.max(0, (s.like_count ?? 0) + (alreadyLiked ? -1 : 1)),
               }
             : s
         );
       const revert = (list: StoryRow[]) =>
-        list.map((s) => (s.id === story.id ? { ...s, ...story } : s));
+        list.map((s) =>
+          s.id === story.id ? { ...s, liked_by_me: story.liked_by_me, like_count: story.like_count } : s
+        );
 
-      setMyStories((prev) => patch(prev));
-      setFriendStories((prev) => patch(prev));
+      setMyStories(patch);
+      setFriendStories(patch);
 
       const { error } = alreadyLiked
-        ? await supabase
-            .from('story_likes')
-            .delete()
-            .eq('story_id', story.id)
-            .eq('user_id', currentUserId)
+        ? await supabase.from('story_likes').delete().eq('story_id', story.id).eq('user_id', currentUserId)
         : await supabase.from('story_likes').insert({ story_id: story.id, user_id: currentUserId });
 
       if (error) {
-        setMyStories((prev) => revert(prev));
-        setFriendStories((prev) => revert(prev));
-        throw error;
+        console.error('toggleLike error:', error.message);
+        setMyStories(revert);
+        setFriendStories(revert);
       }
     },
     [currentUserId]
   );
 
   const addToHighlight = useCallback(
-    async (story: StoryRow, title: string) => {
-      if (!currentUserId) return;
+    async (story: StoryRow, title: string): Promise<boolean> => {
+      if (!currentUserId) return false;
+
+      const duplicate = highlightRows.some(
+        (h) => h.highlight_title === title && h.media_url === story.media_url
+      );
+      if (duplicate) {
+        showToast(`Already in "${title}"`);
+        return false;
+      }
 
       const { data, error } = await supabase
         .from('stories')
@@ -619,49 +743,94 @@ const StoriesScreen: React.FC = () => {
           location_x: story.location_x ?? null,
           location_y: story.location_y ?? null,
         })
-        .select('id')
+        .select('*')
         .single();
 
       if (error || !data) {
         console.error('addToHighlight error:', error?.message);
-        Alert.alert('Error', 'Could not save to highlights.');
-        return;
+        showToast('Could not save to highlights');
+        return false;
       }
 
-      await loadHighlights();
-      Alert.alert('Saved', `Added to "${title}" highlights.`);
+      // Show it immediately (no waiting for a refetch / realtime event).
+      setHighlightRows((prev) => (prev.some((h) => h.id === data.id) ? prev : [...prev, data as StoryRow]));
+      setHighlightsLoading(false);
+      showToast(`Added to "${title}"`);
+      loadHighlights();
+      return true;
     },
-    [currentUserId, loadHighlights]
+    [currentUserId, highlightRows, loadHighlights, showToast]
   );
 
   const deleteStory = useCallback(
     async (story: StoryRow) => {
+      setMyStories((prev) => prev.filter((s) => s.id !== story.id));
+      // NB: the storage file is intentionally NOT removed — a highlight
+      // copy may still point at the same media_url.
       const { error } = await supabase.from('stories').delete().eq('id', story.id);
       if (error) {
-        Alert.alert('Error', 'Could not delete this story.');
-        return;
+        console.error('deleteStory error:', error.message);
+        showToast('Could not delete this story');
       }
       loadStories();
-      loadHighlights();
-      loadExpiredMyStories();
+      loadArchive();
     },
-    [loadStories, loadHighlights, loadExpiredMyStories]
+    [loadStories, loadArchive, showToast]
   );
 
+  const deleteHighlight = useCallback(
+    (group: HighlightGroup) => {
+      Alert.alert('Delete highlight', `Remove "${group.title}" and its ${group.stories.length} item(s)?`, [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const ids = group.stories.map((s) => s.id);
+            setHighlightRows((prev) => prev.filter((s) => !ids.includes(s.id)));
+            const { error } = await supabase.from('stories').delete().in('id', ids);
+            if (error) {
+              console.error('deleteHighlight error:', error.message);
+              showToast('Could not delete highlight');
+              loadHighlights();
+            }
+          },
+        },
+      ]);
+    },
+    [loadHighlights, showToast]
+  );
+
+  const openMyStories = (fromIndex: number) => {
+    setActiveGroup({
+      friendId: currentUserId ?? 'me',
+      friendName: 'My story',
+      emoji: '🙂',
+      color: colors.primary,
+      avatarUrl: null,
+      stories: myStories.slice(fromIndex),
+      allViewed: true,
+      isMine: true,
+    });
+  };
+
+  // ------------------------------------------------------------
+  // Render
+  // ------------------------------------------------------------
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onPullRefresh} tintColor={colors.primary} />}
+      >
         <View style={styles.headerRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.header}>Stories</Text>
             <Text style={styles.subheader}>Visible to friends only · Disappears after 24h</Text>
           </View>
           <View style={styles.headerActions}>
-            <TouchableOpacity
-              style={styles.headerIconBtnAccent}
-              onPress={handlePickMedia}
-              disabled={uploading}
-            >
+            <TouchableOpacity style={styles.headerIconBtnAccent} onPress={handlePickMedia} disabled={uploading}>
               {uploading ? (
                 <ActivityIndicator size="small" color={colors.bg} />
               ) : (
@@ -671,19 +840,11 @@ const StoriesScreen: React.FC = () => {
             <TouchableOpacity style={styles.headerIconBtn} onPress={() => setSearchOpen(true)}>
               <Search size={20} color={colors.text} strokeWidth={2} />
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.headerIconBtn}
-              onPress={() => {
-                setNotifOpen(true);
-                markAllNotifsRead();
-              }}
-            >
+            <TouchableOpacity style={styles.headerIconBtn} onPress={() => setNotifOpen(true)}>
               <Bell size={20} color={colors.text} strokeWidth={2} />
               {unreadNotifCount > 0 && (
                 <View style={styles.notifDot}>
-                  <Text style={styles.notifDotText}>
-                    {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
-                  </Text>
+                  <Text style={styles.notifDotText}>{unreadNotifCount > 9 ? '9+' : unreadNotifCount}</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -710,10 +871,7 @@ const StoriesScreen: React.FC = () => {
               activeOpacity={0.85}
             >
               <View
-                style={[
-                  styles.storyCardFrame,
-                  { borderColor: g.allViewed ? colors.border : colors.primary },
-                ]}
+                style={[styles.storyCardFrame, { borderColor: g.allViewed ? colors.border : colors.primary }]}
               >
                 {g.avatarUrl ? (
                   <Image source={{ uri: g.avatarUrl }} style={styles.storyCardImage} />
@@ -761,20 +919,11 @@ const StoriesScreen: React.FC = () => {
               key={s.id}
               story={s}
               index={i}
-              onPress={() =>
-                setActiveGroup({
-                  friendId: currentUserId ?? 'me',
-                  friendName: 'My story',
-                  emoji: '🙂',
-                  color: colors.primary,
-                  avatarUrl: null,
-                  stories: myStories,
-                  allViewed: true,
-                  isMine: true,
-                })
-              }
+              onPress={() => openMyStories(i)}
               onDelete={() => deleteStory(s)}
-              onAddToHighlight={(title) => addToHighlight(s, title)}
+              onAddToHighlight={async (title) => {
+                await addToHighlight(s, title);
+              }}
             />
           ))}
         </ScrollView>
@@ -785,11 +934,11 @@ const StoriesScreen: React.FC = () => {
         ) : (
           <View style={styles.highlightGrid}>
             <TouchableOpacity
-              style={styles.highlightCard}
+              style={{ width: highlightWidth, height: highlightHeight }}
               onPress={() => setAddHighlightOpen(true)}
               activeOpacity={0.85}
             >
-              <View style={[styles.highlightCardImage, styles.highlightAddFill]}>
+              <View style={[styles.highlightTile, styles.highlightAddFill]}>
                 <Plus size={22} color={colors.primary} strokeWidth={2.5} />
               </View>
               <Text style={styles.highlightAddTitle} numberOfLines={1}>
@@ -797,38 +946,45 @@ const StoriesScreen: React.FC = () => {
               </Text>
             </TouchableOpacity>
 
-            {highlights.map((h) => (
-              <TouchableOpacity
-                key={h.id}
-                style={styles.highlightCard}
-                onPress={() => setActiveHighlight(h)}
-                activeOpacity={0.85}
-              >
-                <Image
-                  source={{ uri: h.coverUrl }}
-                  style={styles.highlightCardImage}
-                  // FIX: previously a broken/blocked image URL (e.g. a
-                  // non-public storage bucket) would just render as a
-                  // blank tile with no feedback, making it look like
-                  // the highlight "wasn't showing" even though the
-                  // data had loaded correctly. Logging onError/onLoad
-                  // makes the real cause visible immediately in the
-                  // console instead of guessing.
-                  onError={(e) =>
-                    console.error(
-                      '[HL] image failed to load for highlight',
-                      h.title,
-                      h.coverUrl,
-                      e.nativeEvent.error
-                    )
-                  }
-                />
-                <View style={styles.highlightCardOverlay} />
-                <Text style={styles.highlightCardTitle} numberOfLines={1}>
-                  {h.title}
-                </Text>
-              </TouchableOpacity>
-            ))}
+            {highlights.map((h) => {
+              const showImage = !!h.coverUrl && !failedCovers.has(h.coverUrl);
+              return (
+                <TouchableOpacity
+                  key={h.id}
+                  style={{ width: highlightWidth, height: highlightHeight }}
+                  onPress={() => setActiveHighlight(h)}
+                  onLongPress={() => deleteHighlight(h)}
+                  delayLongPress={450}
+                  activeOpacity={0.85}
+                >
+                  <View style={styles.highlightTile}>
+                    {showImage ? (
+                      <Image
+                        source={{ uri: h.coverUrl }}
+                        style={styles.highlightImage}
+                        resizeMode="cover"
+                        onError={(e) => {
+                          console.error('[HL] image failed to load', h.title, h.coverUrl, e.nativeEvent.error);
+                          setFailedCovers((prev) => new Set(prev).add(h.coverUrl));
+                        }}
+                      />
+                    ) : (
+                      <View style={[styles.highlightImage, styles.highlightPlaceholder]}>
+                        {h.stories[0]?.media_type === 'video' ? (
+                          <Play size={20} color={colors.textDim} fill={colors.textDim} />
+                        ) : (
+                          <Star size={20} color={colors.textDim} strokeWidth={2} />
+                        )}
+                      </View>
+                    )}
+                    <View style={styles.highlightOverlay} />
+                    <Text style={styles.highlightCardTitle} numberOfLines={1}>
+                      {h.title}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
 
             {highlights.length === 0 && (
               <View style={styles.highlightEmptyHint}>
@@ -840,10 +996,7 @@ const StoriesScreen: React.FC = () => {
 
         {!loading && groups.length === 0 && myStories.length === 0 && (
           <View style={{ marginTop: spacing.xxl }}>
-            <SectionHeader
-              title="Nothing here yet"
-              subtitle="Friends' stories will show up here once posted"
-            />
+            <SectionHeader title="Nothing here yet" subtitle="Friends' stories will show up here once posted" />
           </View>
         )}
       </ScrollView>
@@ -891,17 +1044,17 @@ const StoriesScreen: React.FC = () => {
         groups={groups}
         onOpenGroup={(g) => {
           setBrowseFriendsOpen(false);
-          setActiveGroup(g);
+          afterModalClose(() => setActiveGroup(g));
         }}
       />
 
       <AddHighlightModal
         visible={addHighlightOpen}
         onClose={() => setAddHighlightOpen(false)}
-        candidates={expiredMyStories}
+        candidates={highlightCandidates}
         onConfirm={async (story, title) => {
-          await addToHighlight(story, title);
-          setAddHighlightOpen(false);
+          const ok = await addToHighlight(story, title);
+          if (ok) setAddHighlightOpen(false);
         }}
       />
 
@@ -909,33 +1062,48 @@ const StoriesScreen: React.FC = () => {
         visible={searchOpen}
         onClose={() => setSearchOpen(false)}
         currentUserId={currentUserId}
+        onToast={showToast}
         onOpenProfile={(user) => {
           setSearchOpen(false);
-          openContactProfile(user.id, {
-            name: user.name,
-            username: user.username,
-            emoji: user.emoji,
-            avatarColor: user.color,
-            avatarUrl: user.avatarUrl,
-          });
+          afterModalClose(() =>
+            openContactProfile(user.id, {
+              name: user.name,
+              username: user.username,
+              emoji: user.emoji,
+              avatarColor: user.color,
+              avatarUrl: user.avatarUrl,
+            })
+          );
         }}
       />
 
       <NotificationsModal
         visible={notifOpen}
-        onClose={() => setNotifOpen(false)}
+        onClose={closeNotifications}
         notifications={notifications}
-        friends={friends}
-        onOpenProfile={(n: any) => {
-          setNotifOpen(false);
-          openContactProfile(n.actor_id, {
-            name: n.actor_name,
-            emoji: n.actor_emoji,
-            avatarColor: n.actor_color,
-            avatarUrl: n.actor_avatar_url,
-          });
+        friendIds={friendIds}
+        onAccept={acceptFriendRequest}
+        onDecline={declineFriendRequest}
+        onOpenProfile={(n) => {
+          closeNotifications();
+          afterModalClose(() =>
+            openContactProfile((n as any).actor_id, {
+              name: n.actor_name,
+              emoji: n.actor_emoji,
+              avatarColor: n.actor_color,
+              avatarUrl: n.actor_avatar_url ?? undefined,
+            })
+          );
         }}
       />
+
+      {toast && (
+        <View style={styles.toastWrap} pointerEvents="none">
+          <View style={styles.toast}>
+            <Text style={styles.toastText}>{toast}</Text>
+          </View>
+        </View>
+      )}
     </SafeAreaView>
   );
 };
@@ -953,16 +1121,19 @@ const SectionLabel: React.FC<{ title: string; icon?: React.ReactNode; onMorePres
         {icon}
         <Text style={styles.sectionLabel}>{title}</Text>
       </View>
-      <TouchableOpacity style={styles.sectionMoreBtn} activeOpacity={0.6} onPress={onMorePress}>
-        <Text style={styles.sectionMoreText}>More</Text>
-        <ChevronRight size={13} color={colors.textFaint} strokeWidth={2.2} />
-      </TouchableOpacity>
+      {onMorePress && (
+        <TouchableOpacity style={styles.sectionMoreBtn} activeOpacity={0.6} onPress={onMorePress}>
+          <Text style={styles.sectionMoreText}>More</Text>
+          <ChevronRight size={13} color={colors.textFaint} strokeWidth={2.2} />
+        </TouchableOpacity>
+      )}
     </View>
   );
 };
 
 // ---------------------------------------------------------------------
-// My-story card (9:16) with a 3-dot menu: save to highlight / delete
+// My-story card with a 3-dot menu (single Modal, two steps — iOS cannot
+// open a second Modal while the first one is still dismissing)
 // ---------------------------------------------------------------------
 
 const MyStoryCard: React.FC<{
@@ -970,16 +1141,15 @@ const MyStoryCard: React.FC<{
   index: number;
   onPress: () => void;
   onDelete: () => void;
-  onAddToHighlight: (title: string) => void;
+  onAddToHighlight: (title: string) => Promise<void>;
 }> = ({ story, index, onPress, onDelete, onAddToHighlight }) => {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [pickTitleOpen, setPickTitleOpen] = useState(false);
+  const [step, setStep] = useState<'closed' | 'menu' | 'titles'>('closed');
   const [savingTitle, setSavingTitle] = useState<string | null>(null);
 
   const handleChooseTitle = async (title: string) => {
-    setPickTitleOpen(false);
+    setStep('closed');
     setSavingTitle(title);
     try {
       await onAddToHighlight(title);
@@ -992,7 +1162,13 @@ const MyStoryCard: React.FC<{
     <View style={styles.storyCard}>
       <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
         <View style={[styles.storyCardFrame, { borderColor: colors.primary }]}>
-          <Image source={{ uri: story.media_url }} style={styles.storyCardImage} />
+          {story.media_type === 'video' ? (
+            <View style={[styles.storyCardImage, styles.storyCardAvatarFill]}>
+              <Play size={28} color={colors.textDim} fill={colors.textDim} />
+            </View>
+          ) : (
+            <Image source={{ uri: story.media_url }} style={styles.storyCardImage} />
+          )}
           <View style={styles.storyCardGradient} />
           <Text style={styles.storyCardName} numberOfLines={1}>
             {index === 0 ? 'My story' : `Story ${index + 1}`}
@@ -1000,7 +1176,7 @@ const MyStoryCard: React.FC<{
         </View>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.dotsBtn} onPress={() => setMenuOpen(true)} disabled={!!savingTitle}>
+      <TouchableOpacity style={styles.dotsBtn} onPress={() => setStep('menu')} disabled={!!savingTitle}>
         {savingTitle ? (
           <ActivityIndicator size="small" color={colors.bg} />
         ) : (
@@ -1008,59 +1184,42 @@ const MyStoryCard: React.FC<{
         )}
       </TouchableOpacity>
 
-      <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
-        <TouchableOpacity style={styles.menuBackdrop} activeOpacity={1} onPress={() => setMenuOpen(false)}>
+      <Modal visible={step !== 'closed'} transparent animationType="fade" onRequestClose={() => setStep('closed')}>
+        <TouchableOpacity style={styles.menuBackdrop} activeOpacity={1} onPress={() => setStep('closed')}>
           <View style={styles.menuSheet}>
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={() => {
-                setMenuOpen(false);
-                setPickTitleOpen(true);
-              }}
-            >
-              <BookmarkPlus size={18} color={colors.text} strokeWidth={2} />
-              <Text style={styles.menuItemText}>Add to highlights</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={() => {
-                setMenuOpen(false);
-                Alert.alert('Delete story', 'Are you sure you want to delete this story?', [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: 'Delete', style: 'destructive', onPress: onDelete },
-                ]);
-              }}
-            >
-              <Trash2 size={18} color={colors.danger ?? '#ff3b30'} strokeWidth={2} />
-              <Text style={[styles.menuItemText, { color: colors.danger ?? '#ff3b30' }]}>Delete</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
-      <Modal
-        visible={pickTitleOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setPickTitleOpen(false)}
-      >
-        <TouchableOpacity
-          style={styles.menuBackdrop}
-          activeOpacity={1}
-          onPress={() => setPickTitleOpen(false)}
-        >
-          <View style={styles.menuSheet}>
-            <Text style={styles.menuSheetTitle}>Choose a highlight</Text>
-            {HIGHLIGHT_TITLES.map((title: string) => (
-              <TouchableOpacity
-                key={title}
-                style={styles.menuItem}
-                onPress={() => handleChooseTitle(title)}
-              >
-                <Star size={16} color={colors.primary} strokeWidth={2} />
-                <Text style={styles.menuItemText}>{title}</Text>
-              </TouchableOpacity>
-            ))}
+            {step === 'menu' ? (
+              <>
+                <TouchableOpacity style={styles.menuItem} onPress={() => setStep('titles')}>
+                  <BookmarkPlus size={18} color={colors.text} strokeWidth={2} />
+                  <Text style={styles.menuItemText}>Add to highlights</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.menuItem}
+                  onPress={() => {
+                    setStep('closed');
+                    afterModalClose(() =>
+                      Alert.alert('Delete story', 'Are you sure you want to delete this story?', [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Delete', style: 'destructive', onPress: onDelete },
+                      ])
+                    );
+                  }}
+                >
+                  <Trash2 size={18} color={colors.danger ?? '#ff3b30'} strokeWidth={2} />
+                  <Text style={[styles.menuItemText, { color: colors.danger ?? '#ff3b30' }]}>Delete</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <Text style={styles.menuSheetTitle}>Choose a highlight</Text>
+                {HIGHLIGHT_TITLES.map((title: string) => (
+                  <TouchableOpacity key={title} style={styles.menuItem} onPress={() => handleChooseTitle(title)}>
+                    <Star size={16} color={colors.primary} strokeWidth={2} />
+                    <Text style={styles.menuItemText}>{title}</Text>
+                  </TouchableOpacity>
+                ))}
+              </>
+            )}
           </View>
         </TouchableOpacity>
       </Modal>
@@ -1069,10 +1228,7 @@ const MyStoryCard: React.FC<{
 };
 
 // ---------------------------------------------------------------------
-// Browse-friends modal — full screen, Instagram-Explore style grid of
-// tall 9:16 cards, one per friend group. Opened from the "Friends"
-// section's "More" link. Tapping a card opens that friend's stories
-// in the normal StoryViewerModal (same as tapping the row bubble).
+// Browse-friends modal
 // ---------------------------------------------------------------------
 
 const BrowseFriendsModal: React.FC<{
@@ -1102,52 +1258,50 @@ const BrowseFriendsModal: React.FC<{
             numColumns={2}
             columnWrapperStyle={{ gap: spacing.sm, paddingHorizontal: spacing.lg }}
             contentContainerStyle={{ paddingTop: spacing.sm, paddingBottom: spacing.xl, gap: spacing.sm }}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={styles.browseCard}
-                activeOpacity={0.85}
-                onPress={() => onOpenGroup(item)}
-              >
-                {item.avatarUrl || item.stories[0]?.media_url ? (
-                  <Image
-                    source={{ uri: item.stories[0]?.media_url ?? item.avatarUrl! }}
-                    style={styles.browseCardImage}
-                  />
-                ) : (
-                  <View style={[styles.browseCardImage, styles.storyCardAvatarFill]}>
-                    <Avatar emoji={item.emoji} color={item.color} size={64} />
+            renderItem={({ item }) => {
+              const first = item.stories[0];
+              // A video URL cannot be shown by <Image>; use the avatar instead.
+              const previewUrl = first && first.media_type !== 'video' ? first.media_url : item.avatarUrl;
+              return (
+                <TouchableOpacity style={styles.browseCard} activeOpacity={0.85} onPress={() => onOpenGroup(item)}>
+                  {previewUrl ? (
+                    <Image source={{ uri: previewUrl }} style={styles.browseCardImage} />
+                  ) : (
+                    <View style={[styles.browseCardImage, styles.storyCardAvatarFill]}>
+                      <Avatar emoji={item.emoji} color={item.color} size={64} />
+                    </View>
+                  )}
+                  <View style={styles.browseCardGradient} />
+                  {first?.media_type === 'video' && (
+                    <View style={styles.browseVideoBadge}>
+                      <Play size={12} color="#fff" fill="#fff" />
+                    </View>
+                  )}
+                  <View style={styles.browseCardFooter}>
+                    <View
+                      style={[
+                        styles.browseCardAvatarRing,
+                        { borderColor: item.allViewed ? 'rgba(255,255,255,0.4)' : colors.primary },
+                      ]}
+                    >
+                      {item.avatarUrl ? (
+                        <Image source={{ uri: item.avatarUrl }} style={styles.browseCardAvatarImage} />
+                      ) : (
+                        <Avatar emoji={item.emoji} color={item.color} size={24} />
+                      )}
+                    </View>
+                    <Text style={styles.browseCardName} numberOfLines={1}>
+                      {item.friendName}
+                    </Text>
                   </View>
-                )}
-                <View style={styles.browseCardGradient} />
-                {item.stories[0]?.media_type === 'video' && (
-                  <View style={styles.browseVideoBadge}>
-                    <Play size={12} color="#fff" fill="#fff" />
-                  </View>
-                )}
-                <View style={styles.browseCardFooter}>
-                  <View
-                    style={[
-                      styles.browseCardAvatarRing,
-                      { borderColor: item.allViewed ? 'rgba(255,255,255,0.4)' : colors.primary },
-                    ]}
-                  >
-                    {item.avatarUrl ? (
-                      <Image source={{ uri: item.avatarUrl }} style={styles.browseCardAvatarImage} />
-                    ) : (
-                      <Avatar emoji={item.emoji} color={item.color} size={24} />
-                    )}
-                  </View>
-                  <Text style={styles.browseCardName} numberOfLines={1}>
-                    {item.friendName}
-                  </Text>
-                </View>
-                {item.stories.length > 1 && (
-                  <View style={styles.storyCardCountBadge}>
-                    <Text style={styles.storyCardCountText}>{item.stories.length}</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            )}
+                  {item.stories.length > 1 && (
+                    <View style={styles.storyCardCountBadge}>
+                      <Text style={styles.storyCardCountText}>{item.stories.length}</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            }}
             ListEmptyComponent={
               <Text style={[styles.emptyRowText, { paddingHorizontal: spacing.lg }]}>
                 None of your friends have posted a story yet
@@ -1161,10 +1315,7 @@ const BrowseFriendsModal: React.FC<{
 };
 
 // ---------------------------------------------------------------------
-// Add-highlight modal — pick one of your expired (archived) stories,
-// then pick a highlight title to file it under. Two-step sheet,
-// mirrors Instagram's "New highlight" flow but scoped to the fixed
-// HIGHLIGHT_TITLES list already used elsewhere in this screen.
+// Add-highlight modal
 // ---------------------------------------------------------------------
 
 const AddHighlightModal: React.FC<{
@@ -1183,7 +1334,7 @@ const AddHighlightModal: React.FC<{
   }, [visible]);
 
   const handlePickTitle = async (title: string) => {
-    if (!selectedStory) return;
+    if (!selectedStory || saving) return;
     setSaving(true);
     try {
       await onConfirm(selectedStory, title);
@@ -1212,7 +1363,7 @@ const AddHighlightModal: React.FC<{
 
           {!selectedStory ? (
             <>
-              <Text style={styles.modalHint}>Pick one of your past stories to save.</Text>
+              <Text style={styles.modalHint}>Pick one of your stories to save.</Text>
               <FlatList
                 data={candidates}
                 keyExtractor={(item) => item.id}
@@ -1225,7 +1376,13 @@ const AddHighlightModal: React.FC<{
                     activeOpacity={0.85}
                     onPress={() => setSelectedStory(item)}
                   >
-                    <Image source={{ uri: item.media_url }} style={styles.pickerThumbImage} />
+                    {item.media_type === 'video' ? (
+                      <View style={[styles.pickerThumbImage, styles.storyCardAvatarFill]}>
+                        <Play size={20} color={colors.textDim} fill={colors.textDim} />
+                      </View>
+                    ) : (
+                      <Image source={{ uri: item.media_url }} style={styles.pickerThumbImage} />
+                    )}
                     {item.media_type === 'video' && (
                       <View style={styles.browseVideoBadge}>
                         <Play size={11} color="#fff" fill="#fff" />
@@ -1235,7 +1392,7 @@ const AddHighlightModal: React.FC<{
                 )}
                 ListEmptyComponent={
                   <Text style={[styles.emptyRowText, { paddingHorizontal: spacing.lg }]}>
-                    No past stories yet. Once a story expires, it'll show up here to save as a highlight.
+                    No stories to save yet. Post a story first — it will show up here.
                   </Text>
                 }
               />
@@ -1243,8 +1400,14 @@ const AddHighlightModal: React.FC<{
           ) : (
             <View style={{ padding: spacing.lg }}>
               <View style={styles.selectedPreviewRow}>
-                <Image source={{ uri: selectedStory.media_url }} style={styles.selectedPreviewImage} />
-                <Text style={styles.modalHint}>Choose which highlight to add this story to.</Text>
+                {selectedStory.media_type === 'video' ? (
+                  <View style={[styles.selectedPreviewImage, styles.storyCardAvatarFill]}>
+                    <Play size={18} color={colors.textDim} fill={colors.textDim} />
+                  </View>
+                ) : (
+                  <Image source={{ uri: selectedStory.media_url }} style={styles.selectedPreviewImage} />
+                )}
+                <Text style={[styles.modalHint, { flex: 1 }]}>Choose which highlight to add this story to.</Text>
               </View>
               {HIGHLIGHT_TITLES.map((title: string) => (
                 <TouchableOpacity
@@ -1267,92 +1430,119 @@ const AddHighlightModal: React.FC<{
 };
 
 // ---------------------------------------------------------------------
-// Global search modal — wrapped in its own SafeAreaProvider since RN's
-// <Modal> renders in a separate native window on iOS and does not
-// inherit the app-root SafeAreaProvider's insets.
+// Global search modal
 // ---------------------------------------------------------------------
+
+type SearchRow = SearchUser & { relation?: FriendState };
 
 const SearchModal: React.FC<{
   visible: boolean;
   onClose: () => void;
   currentUserId: string | null;
   onOpenProfile: (user: SearchUser) => void;
-}> = ({ visible, onClose, currentUserId, onOpenProfile }) => {
+  onToast: (message: string) => void;
+}> = ({ visible, onClose, currentUserId, onOpenProfile, onToast }) => {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<SearchUser[]>([]);
+  const [results, setResults] = useState<SearchRow[]>([]);
   const [searching, setSearching] = useState(false);
+  const [error, setError] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestId = useRef(0);
 
   useEffect(() => {
     if (!visible) {
       setQuery('');
       setResults([]);
+      setError(false);
     }
   }, [visible]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (!query.trim()) {
+    // Strip characters that would break PostgREST's `or()` filter syntax.
+    const safe = query.trim().replace(/[%,()*\\]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!safe || !currentUserId) {
+      requestId.current++;
       setResults([]);
+      setSearching(false);
       return;
     }
+
     debounceRef.current = setTimeout(async () => {
+      const id = ++requestId.current;
       setSearching(true);
-      const [asRequester, asTarget] = await Promise.all([
+      setError(false);
+
+      const [profilesRes, friendshipsRes] = await Promise.all([
         supabase
           .from('profiles')
           .select('id, name, username, emoji, avatar_color, avatar_url, is_private')
-          .or(`name.ilike.%${query}%,username.ilike.%${query}%`)
-          .neq('id', currentUserId ?? '')
+          .or(`name.ilike.%${safe}%,username.ilike.%${safe}%`)
+          .neq('id', currentUserId)
           .limit(20),
         supabase
           .from('friendships')
           .select('user_id, friend_id, status')
-          .or(`user_id.eq.${currentUserId ?? ''},friend_id.eq.${currentUserId ?? ''}`)
-          .eq('status', 'accepted'),
+          .or(`user_id.eq.${currentUserId},friend_id.eq.${currentUserId}`)
+          .in('status', ['accepted', 'pending']),
       ]);
 
-      if (asRequester.data) {
-        const friendIds = new Set<string>(
-          (asTarget.data ?? []).map((f: any) =>
-            f.user_id === currentUserId ? f.friend_id : f.user_id
-          )
-        );
-        setResults(
-          asRequester.data.map((u: any) => ({
+      if (id !== requestId.current) return; // a newer search superseded this one
+
+      if (profilesRes.error) {
+        console.error('search error:', profilesRes.error.message);
+        setError(true);
+        setSearching(false);
+        return;
+      }
+
+      const relationById = new Map<string, FriendState>();
+      (friendshipsRes.data ?? []).forEach((f: any) => {
+        const other = f.user_id === currentUserId ? f.friend_id : f.user_id;
+        if (f.status === 'accepted') relationById.set(other, 'accepted');
+        else relationById.set(other, f.user_id === currentUserId ? 'pending_out' : 'pending_in');
+      });
+
+      setResults(
+        (profilesRes.data ?? []).map((u: any) => {
+          const relation = relationById.get(u.id);
+          return {
             id: u.id,
             name: u.name,
             username: u.username,
             emoji: u.emoji ?? '🙂',
             color: u.avatar_color ?? colors.primary,
             avatarUrl: u.avatar_url ?? undefined,
-            is_friend: friendIds.has(u.id),
+            is_friend: relation === 'accepted',
             is_private: !!u.is_private,
-          }))
-        );
-      }
+            relation,
+          } as SearchRow;
+        })
+      );
       setSearching(false);
     }, 300);
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [query, currentUserId]);
+  }, [query, currentUserId, colors.primary]);
 
   const sendFriendRequest = async (targetId: string) => {
     if (!currentUserId) return;
-    const { error } = await supabase.from('friendships').insert({
-      user_id: currentUserId,
-      friend_id: targetId,
-      status: 'pending',
-    });
-    if (error) {
-      Alert.alert('Error', 'Could not send friend request.');
+    // Optimistic: flip to "Pending" straight away.
+    setResults((prev) => prev.map((r) => (r.id === targetId ? { ...r, relation: 'pending_out' } : r)));
+    const { error: insertError } = await supabase
+      .from('friendships')
+      .insert({ user_id: currentUserId, friend_id: targetId, status: 'pending' });
+    if (insertError) {
+      console.error('sendFriendRequest error:', insertError.message);
+      setResults((prev) => prev.map((r) => (r.id === targetId ? { ...r, relation: undefined } : r)));
+      onToast(insertError.code === '23505' ? 'Request already exists' : 'Could not send friend request');
       return;
     }
-    Alert.alert('Request sent', 'Your friend request has been sent.');
+    onToast('Friend request sent');
   };
 
   return (
@@ -1369,6 +1559,8 @@ const SearchModal: React.FC<{
                 value={query}
                 onChangeText={setQuery}
                 autoFocus
+                autoCapitalize="none"
+                autoCorrect={false}
               />
             </View>
             <TouchableOpacity onPress={onClose} style={styles.modalCloseBtn}>
@@ -1381,13 +1573,10 @@ const SearchModal: React.FC<{
           <FlatList
             data={results}
             keyExtractor={(item) => item.id}
+            keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ padding: spacing.lg }}
             renderItem={({ item }) => (
-              <TouchableOpacity
-                style={styles.searchRow}
-                activeOpacity={0.7}
-                onPress={() => onOpenProfile(item)}
-              >
+              <TouchableOpacity style={styles.searchRow} activeOpacity={0.7} onPress={() => onOpenProfile(item)}>
                 {item.avatarUrl ? (
                   <Image source={{ uri: item.avatarUrl }} style={styles.searchAvatarImage} />
                 ) : (
@@ -1396,31 +1585,43 @@ const SearchModal: React.FC<{
                 <View style={{ flex: 1, marginLeft: spacing.sm }}>
                   <Text style={styles.searchName}>{item.name}</Text>
                   <Text style={styles.searchUsername}>
-                    @{item.username} {item.is_private ? '· Private' : ''}
+                    @{item.username}
+                    {item.is_private ? ' · Private' : ''}
                   </Text>
                 </View>
-                {!item.is_friend && (
-                  <TouchableOpacity
-                    style={styles.addFriendBtn}
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      sendFriendRequest(item.id);
-                    }}
-                  >
-                    <UserPlus size={14} color={colors.bg} strokeWidth={2.5} />
-                    <Text style={styles.addFriendBtnText}>{item.is_private ? 'Request' : 'Add'}</Text>
-                  </TouchableOpacity>
-                )}
-                {item.is_friend && (
+
+                {item.relation === 'accepted' && (
                   <View style={styles.friendBadgeWrap}>
                     <UserCheck size={14} color={colors.textFaint} strokeWidth={2} />
                     <Text style={styles.friendBadge}>Friend</Text>
                   </View>
                 )}
+                {item.relation === 'pending_out' && (
+                  <View style={styles.friendBadgeWrap}>
+                    <Clock size={14} color={colors.textFaint} strokeWidth={2} />
+                    <Text style={styles.friendBadge}>Pending</Text>
+                  </View>
+                )}
+                {item.relation === 'pending_in' && (
+                  <View style={styles.friendBadgeWrap}>
+                    <UserPlus size={14} color={colors.primary} strokeWidth={2} />
+                    <Text style={[styles.friendBadge, { color: colors.primary }]}>Wants to connect</Text>
+                  </View>
+                )}
+                {!item.relation && (
+                  <TouchableOpacity style={styles.addFriendBtn} onPress={() => sendFriendRequest(item.id)}>
+                    <UserPlus size={14} color={colors.bg} strokeWidth={2.5} />
+                    <Text style={styles.addFriendBtnText}>{item.is_private ? 'Request' : 'Add'}</Text>
+                  </TouchableOpacity>
+                )}
               </TouchableOpacity>
             )}
             ListEmptyComponent={
-              !searching && query.trim() ? <Text style={styles.emptyRowText}>No results found</Text> : null
+              error ? (
+                <Text style={styles.emptyRowText}>Search failed. Check your connection and try again.</Text>
+              ) : !searching && query.trim() ? (
+                <Text style={styles.emptyRowText}>No results found</Text>
+              ) : null
             }
           />
         </SafeAreaView>
@@ -1430,69 +1631,74 @@ const SearchModal: React.FC<{
 };
 
 // ---------------------------------------------------------------------
-// Notifications modal — same SafeAreaProvider fix as SearchModal, plus:
-//  - a relative "time ago" under each notification (created_at)
-//  - a "Contact" / "New" tag telling you whether the actor is already
-//    an accepted contact or not (derived from the `friends` list
-//    already loaded by the parent — no extra query needed)
-//  - filter tabs: All / Requests (follow_request only) / Contacts
+// Notifications modal (filters, time-ago, Contact/New tag, and
+// Accept / Decline buttons on friend requests)
 // ---------------------------------------------------------------------
 
 type NotifFilter = 'all' | 'requests' | 'contacts';
 
+const NotifIcon: React.FC<{ type: string }> = ({ type }) => {
+  const { colors } = useTheme();
+  switch (type) {
+    case 'like':
+      return <Heart size={16} color={colors.danger ?? '#ff3b30'} fill={colors.danger ?? '#ff3b30'} />;
+    case 'follow_request':
+      return <UserPlus size={16} color={colors.primary} strokeWidth={2.5} />;
+    case 'friend_accepted':
+      return <UserCheck size={16} color={colors.primary} strokeWidth={2.5} />;
+    default:
+      return <Star size={16} color={colors.primary} strokeWidth={2.5} />;
+  }
+};
+
 const NotificationsModal: React.FC<{
   visible: boolean;
   onClose: () => void;
-  notifications: NotificationRow[];
-  friends: any[];
-  onOpenProfile: (n: NotificationRow) => void;
-}> = ({ visible, onClose, notifications, friends, onOpenProfile }) => {
+  notifications: NotifItem[];
+  friendIds: Set<string>;
+  onOpenProfile: (n: NotifItem) => void;
+  onAccept: (n: NotifItem) => Promise<void>;
+  onDecline: (n: NotifItem) => Promise<void>;
+}> = ({ visible, onClose, notifications, friendIds, onOpenProfile, onAccept, onDecline }) => {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [filter, setFilter] = useState<NotifFilter>('all');
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!visible) setFilter('all');
   }, [visible]);
 
-  // Accepted-friend ids, used for the "Contacts" tag/filter. `friends`
-  // already only contains accepted friendships (see AppContext), so
-  // membership == an accepted contact.
-  const friendIds = useMemo(() => new Set((friends ?? []).map((f: any) => f.id)), [friends]);
-
   const filtered = useMemo(() => {
     if (filter === 'all') return notifications;
-    if (filter === 'requests') return notifications.filter((n: any) => n.type === 'follow_request');
-    // contacts: notifications from people already in your contacts
-    return notifications.filter((n: any) => friendIds.has(n.actor_id));
+    if (filter === 'requests') return notifications.filter((n) => (n.type as string) === 'follow_request');
+    return notifications.filter((n) => friendIds.has((n as any).actor_id));
   }, [notifications, filter, friendIds]);
 
-  const describe = (n: NotificationRow) => {
-    switch (n.type) {
+  const describe = (n: NotifItem): string => {
+    switch (n.type as string) {
       case 'like':
         return `${n.actor_name} liked your story`;
       case 'follow_request':
         return `${n.actor_name} sent you a friend request`;
+      case 'friend_accepted':
+        return `${n.actor_name} accepted your friend request`;
       case 'new_story':
         return `${n.actor_name} posted a new story`;
       case 'mention':
         return `${n.actor_name} mentioned you in a story`;
       default:
-        return '';
+        return `${n.actor_name} interacted with you`;
     }
   };
 
-  const NotifIcon: React.FC<{ type: NotificationRow['type'] }> = ({ type }) => {
-    switch (type) {
-      case 'like':
-        return <Heart size={16} color={colors.danger ?? '#ff3b30'} fill={colors.danger ?? '#ff3b30'} />;
-      case 'follow_request':
-        return <UserPlus size={16} color={colors.primary} strokeWidth={2.5} />;
-      case 'new_story':
-      case 'mention':
-        return <Star size={16} color={colors.primary} strokeWidth={2.5} />;
-      default:
-        return null;
+  const run = async (n: NotifItem, fn: (n: NotifItem) => Promise<void>) => {
+    if (busyId) return;
+    setBusyId(n.id);
+    try {
+      await fn(n);
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -1521,9 +1727,7 @@ const NotificationsModal: React.FC<{
                 onPress={() => setFilter(f.key)}
                 activeOpacity={0.7}
               >
-                <Text style={[styles.filterTabText, filter === f.key && styles.filterTabTextActive]}>
-                  {f.label}
-                </Text>
+                <Text style={[styles.filterTabText, filter === f.key && styles.filterTabTextActive]}>{f.label}</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -1533,8 +1737,11 @@ const NotificationsModal: React.FC<{
             keyExtractor={(item) => item.id}
             contentContainerStyle={{ padding: spacing.lg }}
             renderItem={({ item }) => {
-              const isFriend = friendIds.has((item as any).actor_id);
-              const when = timeAgo((item as any).created_at);
+              const actorId = (item as any).actor_id as string;
+              const isFriend = friendIds.has(actorId);
+              const when = timeAgo(item.created_at);
+              const isPendingRequest = (item.type as string) === 'follow_request' && !isFriend;
+              const busy = busyId === item.id;
               return (
                 <TouchableOpacity
                   style={[styles.notifRow, !item.read && styles.notifRowUnread]}
@@ -1542,15 +1749,16 @@ const NotificationsModal: React.FC<{
                   onPress={() => onOpenProfile(item)}
                 >
                   <View style={styles.notifAvatarWrap}>
-                    {(item as any).actor_avatar_url ? (
-                      <Image source={{ uri: (item as any).actor_avatar_url }} style={styles.notifAvatarImage} />
+                    {item.actor_avatar_url ? (
+                      <Image source={{ uri: item.actor_avatar_url }} style={styles.notifAvatarImage} />
                     ) : (
                       <Avatar emoji={item.actor_emoji} color={item.actor_color} size={40} />
                     )}
                     <View style={styles.notifIconBadge}>
-                      <NotifIcon type={item.type} />
+                      <NotifIcon type={item.type as string} />
                     </View>
                   </View>
+
                   <View style={{ flex: 1 }}>
                     <Text style={styles.notifText}>{describe(item)}</Text>
                     <View style={styles.notifMetaRow}>
@@ -1559,6 +1767,25 @@ const NotificationsModal: React.FC<{
                         <Text style={styles.notifBadgeText}>{isFriend ? 'Contact' : 'New'}</Text>
                       </View>
                     </View>
+
+                    {isPendingRequest && (
+                      <View style={styles.notifActions}>
+                        {busy ? (
+                          <ActivityIndicator size="small" color={colors.primary} />
+                        ) : (
+                          <>
+                            <TouchableOpacity style={styles.acceptBtn} onPress={() => run(item, onAccept)}>
+                              <Check size={14} color={colors.bg} strokeWidth={3} />
+                              <Text style={styles.acceptBtnText}>Accept</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.declineBtn} onPress={() => run(item, onDecline)}>
+                              <X size={14} color={colors.textDim} strokeWidth={3} />
+                              <Text style={styles.declineBtnText}>Decline</Text>
+                            </TouchableOpacity>
+                          </>
+                        )}
+                      </View>
+                    )}
                   </View>
                 </TouchableOpacity>
               );
@@ -1582,13 +1809,9 @@ const NotificationsModal: React.FC<{
 const makeStyles = (colors: ColorScheme) =>
   StyleSheet.create({
     safe: { flex: 1, backgroundColor: colors.bg },
-    scroll: { padding: spacing.lg },
+    scroll: { padding: spacing.lg, paddingBottom: spacing.xxl },
 
-    headerRow: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'flex-start',
-    },
+    headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
     header: { ...typography.h1, color: colors.text },
     subheader: { ...typography.body, color: colors.textFaint, marginTop: 4 },
 
@@ -1638,29 +1861,24 @@ const makeStyles = (colors: ColorScheme) =>
       textTransform: 'uppercase',
       letterSpacing: 0.5,
     },
-    sectionMoreBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+    sectionMoreBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, padding: 4 },
     sectionMoreText: { ...typography.small, color: colors.textFaint, fontWeight: '600' },
 
     rowScroll: { marginTop: 2 },
     emptyRowText: { ...typography.small, color: colors.textFaint, paddingVertical: spacing.md },
 
-    // -----------------------------------------------------------------
-    // 9:16 vertical story card (Friends row + My story row). Replaces
-    // the old round bubble: a tall rounded-rect thumbnail with a
-    // bottom gradient, a small round avatar chip floating over the
-    // bottom-left corner, and the name printed on the gradient.
-    // -----------------------------------------------------------------
+    // 9:16 story cards
     storyCard: { alignItems: 'center', marginRight: spacing.sm, width: 104 },
     storyCardFrame: {
       width: 104,
-      height: 185, // 9:16 aspect ratio
+      height: 185,
       borderRadius: radius.lg,
       borderWidth: 2.5,
       overflow: 'hidden',
       backgroundColor: colors.card,
       justifyContent: 'flex-end',
     },
-    storyCardImage: { ...StyleSheet.absoluteFill, width: undefined, height: undefined },
+    storyCardImage: { ...FILL },
     storyCardAvatarFill: { alignItems: 'center', justifyContent: 'center' },
     storyCardGradient: {
       position: 'absolute',
@@ -1695,13 +1913,7 @@ const makeStyles = (colors: ColorScheme) =>
       borderColor: '#fff',
     },
     storyCardAvatarChipImage: { width: '100%', height: '100%' },
-    storyCardName: {
-      color: '#fff',
-      fontSize: 12,
-      fontWeight: '700',
-      paddingHorizontal: 8,
-      paddingBottom: 8,
-    },
+    storyCardName: { color: '#fff', fontSize: 12, fontWeight: '700', paddingHorizontal: 8, paddingBottom: 8 },
 
     addCardFrame: {
       borderColor: colors.border,
@@ -1712,33 +1924,18 @@ const makeStyles = (colors: ColorScheme) =>
       gap: 8,
       paddingHorizontal: 8,
     },
-    addCardText: {
-      ...typography.small,
-      color: colors.primary,
-      fontWeight: '700',
-      textAlign: 'center',
-    },
+    addCardText: { ...typography.small, color: colors.primary, fontWeight: '700', textAlign: 'center' },
 
-    highlightGrid: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      justifyContent: 'flex-start',
-      gap: spacing.sm,
-      marginTop: 2,
-    },
-    highlightCard: {
-      width: '22%',
-      aspectRatio: 0.68,
+    // Highlights — size is set inline (explicit px) from useWindowDimensions
+    highlightGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: 2 },
+    highlightTile: {
+      flex: 1,
       borderRadius: radius.lg,
       overflow: 'hidden',
       backgroundColor: colors.card,
-      marginBottom: spacing.sm,
     },
-    highlightCardImage: {
-      ...StyleSheet.absoluteFill,
-      width: undefined,
-      height: undefined,
-    },
+    highlightImage: { ...FILL },
+    highlightPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.card },
     highlightAddFill: {
       alignItems: 'center',
       justifyContent: 'center',
@@ -1756,10 +1953,7 @@ const makeStyles = (colors: ColorScheme) =>
       fontWeight: '700',
       textAlign: 'center',
     },
-    highlightCardOverlay: {
-      ...StyleSheet.absoluteFill,
-      backgroundColor: 'rgba(0,0,0,0.18)',
-    },
+    highlightOverlay: { ...FILL, backgroundColor: 'rgba(0,0,0,0.18)' },
     highlightCardTitle: {
       position: 'absolute',
       bottom: spacing.sm,
@@ -1786,11 +1980,7 @@ const makeStyles = (colors: ColorScheme) =>
       borderColor: colors.bg,
     },
 
-    menuBackdrop: {
-      flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.4)',
-      justifyContent: 'flex-end',
-    },
+    menuBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
     menuSheet: {
       backgroundColor: colors.card,
       borderTopLeftRadius: radius.lg,
@@ -1798,18 +1988,8 @@ const makeStyles = (colors: ColorScheme) =>
       padding: spacing.lg,
       paddingBottom: spacing.xl,
     },
-    menuSheetTitle: {
-      ...typography.body,
-      color: colors.textFaint,
-      fontWeight: '700',
-      marginBottom: spacing.sm,
-    },
-    menuItem: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing.sm,
-      paddingVertical: spacing.md,
-    },
+    menuSheetTitle: { ...typography.body, color: colors.textFaint, fontWeight: '700', marginBottom: spacing.sm },
+    menuItem: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.md },
     menuItemText: { ...typography.body, color: colors.text, fontWeight: '600' },
 
     modalSafe: { flex: 1, backgroundColor: colors.bg },
@@ -1840,12 +2020,7 @@ const makeStyles = (colors: ColorScheme) =>
       paddingHorizontal: spacing.md,
     },
     searchInputIcon: { marginRight: spacing.xs },
-    searchInput: {
-      flex: 1,
-      paddingVertical: spacing.sm,
-      color: colors.text,
-      ...typography.body,
-    },
+    searchInput: { flex: 1, paddingVertical: spacing.sm, color: colors.text, ...typography.body },
 
     searchRow: {
       flexDirection: 'row',
@@ -1884,10 +2059,7 @@ const makeStyles = (colors: ColorScheme) =>
       borderWidth: 1,
       borderColor: colors.border,
     },
-    filterTabActive: {
-      backgroundColor: colors.primary,
-      borderColor: colors.primary,
-    },
+    filterTabActive: { backgroundColor: colors.primary, borderColor: colors.primary },
     filterTabText: { ...typography.small, color: colors.textDim, fontWeight: '600' },
     filterTabTextActive: { color: colors.bg },
 
@@ -1915,34 +2087,45 @@ const makeStyles = (colors: ColorScheme) =>
       borderWidth: 2,
       borderColor: colors.bg,
     },
-    notifText: { ...typography.body, color: colors.text, flex: 1 },
-    notifMetaRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing.xs,
-      marginTop: 3,
-    },
+    notifText: { ...typography.body, color: colors.text },
+    notifMetaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: 3 },
     notifTime: { ...typography.small, color: colors.textFaint },
-    notifBadge: {
-      paddingHorizontal: 8,
-      paddingVertical: 2,
-      borderRadius: radius.pill,
-    },
+    notifBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: radius.pill },
     notifBadgeFriend: { backgroundColor: colors.primary + '22' },
     notifBadgeContact: { backgroundColor: colors.border },
     notifBadgeText: { fontSize: 10, fontWeight: '700', color: colors.textDim },
+    notifActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.sm },
+    acceptBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      backgroundColor: colors.primary,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.md,
+      paddingVertical: 6,
+    },
+    acceptBtnText: { color: colors.bg, fontWeight: '700', fontSize: 12 },
+    declineBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.md,
+      paddingVertical: 6,
+    },
+    declineBtnText: { color: colors.textDim, fontWeight: '700', fontSize: 12 },
 
-    // -----------------------------------------------------------------
-    // Browse-friends full-screen grid ("More" from the Friends row)
-    // -----------------------------------------------------------------
     browseCard: {
       flex: 1,
-      aspectRatio: 0.58, // tall 9:16-ish card, two per row
+      aspectRatio: 0.58,
       borderRadius: radius.lg,
       overflow: 'hidden',
       backgroundColor: colors.card,
     },
-    browseCardImage: { ...StyleSheet.absoluteFill, width: undefined, height: undefined },
+    browseCardImage: { ...FILL },
     browseCardGradient: {
       position: 'absolute',
       left: 0,
@@ -1983,29 +2166,20 @@ const makeStyles = (colors: ColorScheme) =>
     browseCardAvatarImage: { width: '100%', height: '100%' },
     browseCardName: { color: '#fff', fontSize: 13, fontWeight: '700', flexShrink: 1 },
 
-    // -----------------------------------------------------------------
-    // Add-highlight modal: expired-story picker grid + preview
-    // -----------------------------------------------------------------
-    pickerThumb: {
-      flex: 1,
-      aspectRatio: 1,
-      borderRadius: radius.md,
-      overflow: 'hidden',
-      backgroundColor: colors.card,
-    },
+    pickerThumb: { flex: 1, aspectRatio: 1, borderRadius: radius.md, overflow: 'hidden', backgroundColor: colors.card },
     pickerThumbImage: { width: '100%', height: '100%' },
-    selectedPreviewRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing.md,
-      marginBottom: spacing.lg,
+    selectedPreviewRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.lg },
+    selectedPreviewImage: { width: 56, height: 96, borderRadius: radius.md, backgroundColor: colors.card },
+
+    toastWrap: { position: 'absolute', left: 0, right: 0, bottom: spacing.xl, alignItems: 'center' },
+    toast: {
+      backgroundColor: colors.text,
+      borderRadius: radius.pill,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.sm,
+      maxWidth: '85%',
     },
-    selectedPreviewImage: {
-      width: 56,
-      height: 96,
-      borderRadius: radius.md,
-      backgroundColor: colors.card,
-    },
+    toastText: { color: colors.bg, fontWeight: '600', fontSize: 13 },
   });
 
 export default StoriesScreen;
