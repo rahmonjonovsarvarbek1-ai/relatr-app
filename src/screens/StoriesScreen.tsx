@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -15,9 +15,10 @@ import {
   RefreshControl,
   useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView, SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
-import * as ImagePicker from 'expo-image-picker';
+import { SafeAreaView, SafeAreaProvider, initialWindowMetrics, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import * as FileSystem from 'expo-file-system';
+import * as VideoThumbnails from 'expo-video-thumbnails';
 import { decode } from 'base64-arraybuffer';
 import {
   Search,
@@ -46,6 +47,8 @@ import { SectionHeader } from '../components/Card';
 import { supabase } from '../utils/supabase';
 import StoryViewerModal from './StoryViewerModal';
 import StoryComposerModal from './StoryComposerModal';
+import StoryCamera from './StoryCamera';
+import type { CapturedMedia } from './StoryCamera';
 import { useConnectedFriends } from '../hooks/useConnectedFriends';
 import {
   HIGHLIGHT_TITLES,
@@ -66,7 +69,8 @@ import {
 const FILL = { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } as const;
 
 const HIGHLIGHT_COLUMNS = 4;
-const HIGHLIGHT_ASPECT = 0.68; // width / height
+// Same 9:16 shape as the friends' story cards, just smaller.
+const HIGHLIGHT_ASPECT = 9 / 16; // width / height
 
 const MIME_BY_EXT: Record<string, string> = {
   jpg: 'image/jpeg',
@@ -135,6 +139,12 @@ const readUriAsArrayBuffer = async (uri: string): Promise<ArrayBuffer> => {
   return decode(base64);
 };
 
+// An <Image> cannot render a video URL. A story's "cover" is its image,
+// or the thumbnail generated at upload time for videos (may be null for
+// old videos).
+const coverOf = (s: StoryRow): string | null =>
+  (s as any).thumbnail_url ?? (s.media_type !== 'video' ? s.media_url : null);
+
 type NotifItem = NotificationRow & {
   created_at?: string | null;
   actor_avatar_url?: string | null;
@@ -142,6 +152,8 @@ type NotifItem = NotificationRow & {
 };
 
 type FriendState = 'accepted' | 'pending_out' | 'pending_in';
+
+type GroupWithCover = FriendStoryGroup & { coverUrl?: string | null };
 
 // ---------------------------------------------------------------------
 // Screen
@@ -152,7 +164,13 @@ const StoriesScreen: React.FC = () => {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const { width: screenWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
+
+  // Height of the bottom tab bar (0 if this screen is not inside a tab
+  // navigator). Used so the last row is never hidden behind it.
+  const tabBarHeight = useContext(BottomTabBarHeightContext) ?? 0;
+  const bottomSpace = tabBarHeight > 0 ? tabBarHeight : insets.bottom + 72;
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [myStories, setMyStories] = useState<StoryRow[]>([]);
@@ -172,7 +190,9 @@ const StoriesScreen: React.FC = () => {
   const [searchOpen, setSearchOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [browseFriendsOpen, setBrowseFriendsOpen] = useState(false);
+  const [browseHighlightsOpen, setBrowseHighlightsOpen] = useState(false);
   const [addHighlightOpen, setAddHighlightOpen] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [composerUri, setComposerUri] = useState<string | null>(null);
   const [composerType, setComposerType] = useState<'image' | 'video'>('image');
   const [composerMime, setComposerMime] = useState<string | null>(null);
@@ -352,9 +372,9 @@ const StoriesScreen: React.FC = () => {
       byTitle.set(key, list);
     });
     return Array.from(byTitle.entries()).map(([title, stories]) => {
-      // Prefer an image as the cover — an <Image> cannot render a video URL.
-      const cover = stories.find((s) => s.media_type !== 'video');
-      return { id: title, title, coverUrl: cover?.media_url ?? '', stories };
+      // First story that has a renderable cover (image or video thumbnail).
+      const cover = stories.map(coverOf).find((u): u is string => !!u);
+      return { id: title, title, coverUrl: cover ?? '', stories };
     });
   }, [highlightRows]);
 
@@ -449,7 +469,7 @@ const StoriesScreen: React.FC = () => {
   // ------------------------------------------------------------
   // Derived data
   // ------------------------------------------------------------
-  const groups: FriendStoryGroup[] = useMemo(() => {
+  const groups: GroupWithCover[] = useMemo(() => {
     const byFriend = new Map<string, StoryRow[]>();
     friendStories.forEach((s) => {
       const list = byFriend.get(s.owner_id) ?? [];
@@ -457,10 +477,16 @@ const StoriesScreen: React.FC = () => {
       byFriend.set(s.owner_id, list);
     });
 
-    const result: FriendStoryGroup[] = [];
+    const result: GroupWithCover[] = [];
     friends.forEach((f: any) => {
       const stories = byFriend.get(f.id);
       if (!stories || stories.length === 0) return;
+
+      // Card cover = the friend's story itself (first unviewed one with a
+      // renderable cover, otherwise the newest) — NOT the profile photo.
+      const withCover = stories.filter((s) => !!coverOf(s));
+      const pick = withCover.find((s) => !viewedIds.has(s.id)) ?? withCover[withCover.length - 1];
+
       result.push({
         friendId: f.id,
         friendName: f.name,
@@ -469,6 +495,7 @@ const StoriesScreen: React.FC = () => {
         avatarUrl: f.avatarUrl,
         stories,
         allViewed: stories.every((s) => viewedIds.has(s.id)),
+        coverUrl: pick ? coverOf(pick) : null,
       });
     });
     return result.sort((a, b) => Number(a.allViewed) - Number(b.allViewed));
@@ -487,23 +514,21 @@ const StoriesScreen: React.FC = () => {
   // ------------------------------------------------------------
   // Actions
   // ------------------------------------------------------------
-  const handlePickMedia = async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('Permission needed', 'Please allow access to your photo library.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images', 'videos'],
-      quality: 0.8,
-      allowsEditing: false,
-    });
-    if (result.canceled || !result.assets?.[0]?.uri) return;
+  const openCamera = () => {
+    if (uploading) return;
+    setCameraOpen(true);
+  };
 
-    const asset = result.assets[0];
-    setComposerType(asset.type === 'video' ? 'video' : 'image');
-    setComposerMime(asset.mimeType ?? null);
-    setComposerUri(asset.uri);
+  // Camera (or its gallery strip) returned a photo/video.
+  const handleCaptured = (media: CapturedMedia) => {
+    setCameraOpen(false);
+    // iOS cannot present the composer Modal while the camera Modal is
+    // still dismissing.
+    afterModalClose(() => {
+      setComposerType(media.type);
+      setComposerMime(media.mimeType ?? null);
+      setComposerUri(media.uri);
+    });
   };
 
   const handlePublishStory = async (
@@ -511,18 +536,26 @@ const StoriesScreen: React.FC = () => {
     mediaType: 'image' | 'video',
     payload: {
       caption: string;
+      privacy?: 'public' | 'close_friends';
+      durationSec?: number | null;
       textStickers: StoryTextSticker[];
       mentionStickers: StoryMentionSticker[];
-      locationSticker: StoryLocationSticker | null;
+      locationSticker: (StoryLocationSticker & { latitude?: number; longitude?: number }) | null;
+      pollStickers?: any[];
+      questionStickers?: any[];
+      musicStickers?: any[];
+      linkStickers?: any[];
+      countdownStickers?: any[];
     }
   ) => {
     if (!currentUserId || uploading) return;
     setUploading(true);
-    let uploadedPath: string | null = null;
+    const uploadedPaths: string[] = [];
     try {
       const caption = (payload.caption ?? '').trim();
       const ext = getSafeExt(uri, mediaType, composerMime);
-      const path = `${currentUserId}/${Date.now()}.${ext}`;
+      const stamp = Date.now();
+      const path = `${currentUserId}/${stamp}.${ext}`;
       const contentType =
         composerMime && composerMime.includes('/') && composerMime !== 'image/jpg'
           ? composerMime
@@ -533,23 +566,57 @@ const StoriesScreen: React.FC = () => {
         .from('story-media')
         .upload(path, arrayBuffer, { contentType });
       if (uploadError) throw uploadError;
-      uploadedPath = path;
+      uploadedPaths.push(path);
 
       const { data: publicUrlData } = supabase.storage.from('story-media').getPublicUrl(path);
 
+      // Videos: generate a still frame so cards / highlights can show a
+      // real preview instead of the profile photo. Best-effort only.
+      let thumbnailUrl: string | null = null;
+      if (mediaType === 'video') {
+        try {
+          const thumb = await VideoThumbnails.getThumbnailAsync(uri, { time: 500, quality: 0.7 });
+          const thumbBuffer = await readUriAsArrayBuffer(thumb.uri);
+          const thumbPath = `${currentUserId}/${stamp}_thumb.jpg`;
+          const { error: thumbError } = await supabase.storage
+            .from('story-media')
+            .upload(thumbPath, thumbBuffer, { contentType: 'image/jpeg' });
+          if (!thumbError) {
+            uploadedPaths.push(thumbPath);
+            thumbnailUrl = supabase.storage.from('story-media').getPublicUrl(thumbPath).data.publicUrl;
+          }
+        } catch (e) {
+          console.warn('video thumbnail failed:', e);
+        }
+      }
+
+      const loc = payload.locationSticker;
       const { data: inserted, error: insertError } = await supabase
         .from('stories')
         .insert({
           owner_id: currentUserId,
           media_url: publicUrlData.publicUrl,
           media_type: mediaType,
+          thumbnail_url: thumbnailUrl,
           caption: caption || null,
           expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
           is_highlight: false,
+          privacy: payload.privacy ?? 'public',
+          duration_sec: mediaType === 'image' ? payload.durationSec ?? null : null,
           text_stickers: payload.textStickers ?? [],
-          location_label: payload.locationSticker?.label ?? null,
-          location_x: payload.locationSticker?.x ?? null,
-          location_y: payload.locationSticker?.y ?? null,
+          location_label: loc?.label ?? null,
+          location_x: loc?.x ?? null,
+          location_y: loc?.y ?? null,
+          location_lat: loc?.latitude ?? null,
+          location_lng: loc?.longitude ?? null,
+          extra_stickers: {
+            v: 2,
+            poll: payload.pollStickers ?? [],
+            question: payload.questionStickers ?? [],
+            music: payload.musicStickers ?? [],
+            link: payload.linkStickers ?? [],
+            countdown: payload.countdownStickers ?? [],
+          },
         })
         .select('id')
         .single();
@@ -567,16 +634,16 @@ const StoriesScreen: React.FC = () => {
         if (mentionError) console.error('story_mentions insert error:', mentionError.message);
       }
 
-      uploadedPath = null; // success — keep the file
+      uploadedPaths.length = 0; // success — keep the files
       setComposerUri(null);
       showToast('Story posted');
       loadStories();
       loadArchive();
     } catch (err) {
       console.error('Story upload error:', err);
-      if (uploadedPath) {
-        // Insert failed after upload: don't leave an orphan file behind.
-        supabase.storage.from('story-media').remove([uploadedPath]).catch(() => {});
+      if (uploadedPaths.length > 0) {
+        // Insert failed after upload: don't leave orphan files behind.
+        supabase.storage.from('story-media').remove(uploadedPaths).catch(() => {});
       }
       const message =
         err instanceof Error ? err.message : (err as any)?.message ?? JSON.stringify(err);
@@ -734,6 +801,7 @@ const StoriesScreen: React.FC = () => {
           owner_id: currentUserId,
           media_url: story.media_url,
           media_type: story.media_type,
+          thumbnail_url: (story as any).thumbnail_url ?? null,
           caption: story.caption,
           is_highlight: true,
           highlight_title: title,
@@ -742,6 +810,10 @@ const StoriesScreen: React.FC = () => {
           location_label: story.location_label ?? null,
           location_x: story.location_x ?? null,
           location_y: story.location_y ?? null,
+          location_lat: (story as any).location_lat ?? null,
+          location_lng: (story as any).location_lng ?? null,
+          extra_stickers: (story as any).extra_stickers ?? null,
+          duration_sec: (story as any).duration_sec ?? null,
         })
         .select('*')
         .single();
@@ -820,7 +892,8 @@ const StoriesScreen: React.FC = () => {
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        style={{ flex: 1 }}
+        contentContainerStyle={[styles.scroll, { paddingBottom: bottomSpace + spacing.xl }]}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onPullRefresh} tintColor={colors.primary} />}
       >
@@ -830,7 +903,7 @@ const StoriesScreen: React.FC = () => {
             <Text style={styles.subheader}>Visible to friends only · Disappears after 24h</Text>
           </View>
           <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.headerIconBtnAccent} onPress={handlePickMedia} disabled={uploading}>
+            <TouchableOpacity style={styles.headerIconBtnAccent} onPress={openCamera} disabled={uploading}>
               {uploading ? (
                 <ActivityIndicator size="small" color={colors.bg} />
               ) : (
@@ -873,7 +946,9 @@ const StoriesScreen: React.FC = () => {
               <View
                 style={[styles.storyCardFrame, { borderColor: g.allViewed ? colors.border : colors.primary }]}
               >
-                {g.avatarUrl ? (
+                {g.coverUrl ? (
+                  <Image source={{ uri: g.coverUrl }} style={styles.storyCardImage} resizeMode="cover" />
+                ) : g.avatarUrl ? (
                   <Image source={{ uri: g.avatarUrl }} style={styles.storyCardImage} />
                 ) : (
                   <View style={[styles.storyCardImage, styles.storyCardAvatarFill]}>
@@ -903,7 +978,7 @@ const StoriesScreen: React.FC = () => {
 
         <SectionLabel title="My story" />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.rowScroll}>
-          <TouchableOpacity style={styles.storyCard} onPress={handlePickMedia} activeOpacity={0.85}>
+          <TouchableOpacity style={styles.storyCard} onPress={openCamera} activeOpacity={0.85}>
             <View style={[styles.storyCardFrame, styles.addCardFrame]}>
               {uploading ? (
                 <ActivityIndicator size="small" color={colors.primary} />
@@ -928,7 +1003,11 @@ const StoriesScreen: React.FC = () => {
           ))}
         </ScrollView>
 
-        <SectionLabel icon={<Star size={13} color={colors.textDim} strokeWidth={2.2} />} title="Highlights" />
+        <SectionLabel
+          icon={<Star size={13} color={colors.textDim} strokeWidth={2.2} />}
+          title="Highlights"
+          onMorePress={() => setBrowseHighlightsOpen(true)}
+        />
         {highlightsLoading ? (
           <ActivityIndicator style={{ marginTop: spacing.sm }} color={colors.primary} />
         ) : (
@@ -1028,6 +1107,8 @@ const StoriesScreen: React.FC = () => {
         />
       )}
 
+      {cameraOpen && <StoryCamera onClose={() => setCameraOpen(false)} onCaptured={handleCaptured} />}
+
       {composerUri && (
         <StoryComposerModal
           uri={composerUri}
@@ -1045,6 +1126,21 @@ const StoriesScreen: React.FC = () => {
         onOpenGroup={(g) => {
           setBrowseFriendsOpen(false);
           afterModalClose(() => setActiveGroup(g));
+        }}
+      />
+
+      <BrowseHighlightsModal
+        visible={browseHighlightsOpen}
+        onClose={() => setBrowseHighlightsOpen(false)}
+        highlights={highlights}
+        onOpen={(h) => {
+          setBrowseHighlightsOpen(false);
+          afterModalClose(() => setActiveHighlight(h));
+        }}
+        onDelete={deleteHighlight}
+        onNew={() => {
+          setBrowseHighlightsOpen(false);
+          afterModalClose(() => setAddHighlightOpen(true));
         }}
       />
 
@@ -1098,7 +1194,7 @@ const StoriesScreen: React.FC = () => {
       />
 
       {toast && (
-        <View style={styles.toastWrap} pointerEvents="none">
+        <View style={[styles.toastWrap, { bottom: bottomSpace + spacing.sm }]} pointerEvents="none">
           <View style={styles.toast}>
             <Text style={styles.toastText}>{toast}</Text>
           </View>
@@ -1147,6 +1243,7 @@ const MyStoryCard: React.FC<{
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [step, setStep] = useState<'closed' | 'menu' | 'titles'>('closed');
   const [savingTitle, setSavingTitle] = useState<string | null>(null);
+  const cover = coverOf(story);
 
   const handleChooseTitle = async (title: string) => {
     setStep('closed');
@@ -1162,12 +1259,12 @@ const MyStoryCard: React.FC<{
     <View style={styles.storyCard}>
       <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
         <View style={[styles.storyCardFrame, { borderColor: colors.primary }]}>
-          {story.media_type === 'video' ? (
+          {cover ? (
+            <Image source={{ uri: cover }} style={styles.storyCardImage} />
+          ) : (
             <View style={[styles.storyCardImage, styles.storyCardAvatarFill]}>
               <Play size={28} color={colors.textDim} fill={colors.textDim} />
             </View>
-          ) : (
-            <Image source={{ uri: story.media_url }} style={styles.storyCardImage} />
           )}
           <View style={styles.storyCardGradient} />
           <Text style={styles.storyCardName} numberOfLines={1}>
@@ -1234,8 +1331,8 @@ const MyStoryCard: React.FC<{
 const BrowseFriendsModal: React.FC<{
   visible: boolean;
   onClose: () => void;
-  groups: FriendStoryGroup[];
-  onOpenGroup: (g: FriendStoryGroup) => void;
+  groups: GroupWithCover[];
+  onOpenGroup: (g: GroupWithCover) => void;
 }> = ({ visible, onClose, groups, onOpenGroup }) => {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -1259,9 +1356,7 @@ const BrowseFriendsModal: React.FC<{
             columnWrapperStyle={{ gap: spacing.sm, paddingHorizontal: spacing.lg }}
             contentContainerStyle={{ paddingTop: spacing.sm, paddingBottom: spacing.xl, gap: spacing.sm }}
             renderItem={({ item }) => {
-              const first = item.stories[0];
-              // A video URL cannot be shown by <Image>; use the avatar instead.
-              const previewUrl = first && first.media_type !== 'video' ? first.media_url : item.avatarUrl;
+              const previewUrl = item.coverUrl ?? item.avatarUrl;
               return (
                 <TouchableOpacity style={styles.browseCard} activeOpacity={0.85} onPress={() => onOpenGroup(item)}>
                   {previewUrl ? (
@@ -1272,11 +1367,6 @@ const BrowseFriendsModal: React.FC<{
                     </View>
                   )}
                   <View style={styles.browseCardGradient} />
-                  {first?.media_type === 'video' && (
-                    <View style={styles.browseVideoBadge}>
-                      <Play size={12} color="#fff" fill="#fff" />
-                    </View>
-                  )}
                   <View style={styles.browseCardFooter}>
                     <View
                       style={[
@@ -1315,6 +1405,91 @@ const BrowseFriendsModal: React.FC<{
 };
 
 // ---------------------------------------------------------------------
+// Browse-highlights modal (full-screen list, same look as friends')
+// ---------------------------------------------------------------------
+
+const BrowseHighlightsModal: React.FC<{
+  visible: boolean;
+  onClose: () => void;
+  highlights: HighlightGroup[];
+  onOpen: (h: HighlightGroup) => void;
+  onDelete: (h: HighlightGroup) => void;
+  onNew: () => void;
+}> = ({ visible, onClose, highlights, onOpen, onDelete, onNew }) => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeaderRow}>
+            <Text style={styles.modalTitle}>Highlights</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <TouchableOpacity onPress={onNew} style={styles.modalCloseBtn}>
+                <Text style={styles.modalCloseText}>+ New</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={onClose} style={styles.modalCloseBtn}>
+                <Text style={styles.modalCloseText}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <Text style={styles.modalHint}>Tap to watch · Long press to delete</Text>
+
+          <FlatList
+            data={highlights}
+            key="browse-highlights-2col"
+            keyExtractor={(item) => item.id}
+            numColumns={2}
+            columnWrapperStyle={{ gap: spacing.sm, paddingHorizontal: spacing.lg }}
+            contentContainerStyle={{ paddingTop: spacing.sm, paddingBottom: spacing.xl, gap: spacing.sm }}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.browseCard}
+                activeOpacity={0.85}
+                onPress={() => onOpen(item)}
+                onLongPress={() => onDelete(item)}
+                delayLongPress={450}
+              >
+                {item.coverUrl ? (
+                  <Image source={{ uri: item.coverUrl }} style={styles.browseCardImage} />
+                ) : (
+                  <View style={[styles.browseCardImage, styles.storyCardAvatarFill]}>
+                    {item.stories[0]?.media_type === 'video' ? (
+                      <Play size={26} color={colors.textDim} fill={colors.textDim} />
+                    ) : (
+                      <Star size={26} color={colors.textDim} strokeWidth={2} />
+                    )}
+                  </View>
+                )}
+                <View style={styles.browseCardGradient} />
+                <View style={styles.browseCardFooter}>
+                  <Star size={14} color="#fff" fill="#fff" strokeWidth={2} />
+                  <Text style={styles.browseCardName} numberOfLines={1}>
+                    {item.title}
+                  </Text>
+                </View>
+                {item.stories.length > 1 && (
+                  <View style={styles.storyCardCountBadge}>
+                    <Text style={styles.storyCardCountText}>{item.stories.length}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={
+              <Text style={[styles.emptyRowText, { paddingHorizontal: spacing.lg }]}>
+                No highlights yet. Tap "+ New" to save your first one.
+              </Text>
+            }
+          />
+        </SafeAreaView>
+      </SafeAreaProvider>
+    </Modal>
+  );
+};
+
+// ---------------------------------------------------------------------
 // Add-highlight modal
 // ---------------------------------------------------------------------
 
@@ -1343,6 +1518,8 @@ const AddHighlightModal: React.FC<{
     }
   };
 
+  const selectedCover = selectedStory ? coverOf(selectedStory) : null;
+
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <SafeAreaProvider initialMetrics={initialWindowMetrics}>
@@ -1370,26 +1547,29 @@ const AddHighlightModal: React.FC<{
                 numColumns={3}
                 columnWrapperStyle={{ gap: spacing.xs, paddingHorizontal: spacing.lg }}
                 contentContainerStyle={{ paddingTop: spacing.sm, paddingBottom: spacing.xl, gap: spacing.xs }}
-                renderItem={({ item }) => (
-                  <TouchableOpacity
-                    style={styles.pickerThumb}
-                    activeOpacity={0.85}
-                    onPress={() => setSelectedStory(item)}
-                  >
-                    {item.media_type === 'video' ? (
-                      <View style={[styles.pickerThumbImage, styles.storyCardAvatarFill]}>
-                        <Play size={20} color={colors.textDim} fill={colors.textDim} />
-                      </View>
-                    ) : (
-                      <Image source={{ uri: item.media_url }} style={styles.pickerThumbImage} />
-                    )}
-                    {item.media_type === 'video' && (
-                      <View style={styles.browseVideoBadge}>
-                        <Play size={11} color="#fff" fill="#fff" />
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                )}
+                renderItem={({ item }) => {
+                  const cover = coverOf(item);
+                  return (
+                    <TouchableOpacity
+                      style={styles.pickerThumb}
+                      activeOpacity={0.85}
+                      onPress={() => setSelectedStory(item)}
+                    >
+                      {cover ? (
+                        <Image source={{ uri: cover }} style={styles.pickerThumbImage} />
+                      ) : (
+                        <View style={[styles.pickerThumbImage, styles.storyCardAvatarFill]}>
+                          <Play size={20} color={colors.textDim} fill={colors.textDim} />
+                        </View>
+                      )}
+                      {item.media_type === 'video' && (
+                        <View style={styles.browseVideoBadge}>
+                          <Play size={11} color="#fff" fill="#fff" />
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                }}
                 ListEmptyComponent={
                   <Text style={[styles.emptyRowText, { paddingHorizontal: spacing.lg }]}>
                     No stories to save yet. Post a story first — it will show up here.
@@ -1400,12 +1580,12 @@ const AddHighlightModal: React.FC<{
           ) : (
             <View style={{ padding: spacing.lg }}>
               <View style={styles.selectedPreviewRow}>
-                {selectedStory.media_type === 'video' ? (
+                {selectedCover ? (
+                  <Image source={{ uri: selectedCover }} style={styles.selectedPreviewImage} />
+                ) : (
                   <View style={[styles.selectedPreviewImage, styles.storyCardAvatarFill]}>
                     <Play size={18} color={colors.textDim} fill={colors.textDim} />
                   </View>
-                ) : (
-                  <Image source={{ uri: selectedStory.media_url }} style={styles.selectedPreviewImage} />
                 )}
                 <Text style={[styles.modalHint, { flex: 1 }]}>Choose which highlight to add this story to.</Text>
               </View>
@@ -2171,7 +2351,7 @@ const makeStyles = (colors: ColorScheme) =>
     selectedPreviewRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.lg },
     selectedPreviewImage: { width: 56, height: 96, borderRadius: radius.md, backgroundColor: colors.card },
 
-    toastWrap: { position: 'absolute', left: 0, right: 0, bottom: spacing.xl, alignItems: 'center' },
+    toastWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
     toast: {
       backgroundColor: colors.text,
       borderRadius: radius.pill,

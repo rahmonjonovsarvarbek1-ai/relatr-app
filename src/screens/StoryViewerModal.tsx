@@ -374,7 +374,7 @@ const StoryViewerModal: React.FC<Props> = ({ group, onClose, onViewed, onToggleL
     try {
       await onToggleLike(story);
     } catch {
-      Alert.alert('Xatolik', "Layk holatini yangilab bo'lmadi. Qaytadan urinib ko'ring.");
+      Alert.alert('Error', "like is not toggled. Please try again later.");
     }
   };
 
@@ -394,7 +394,7 @@ const StoryViewerModal: React.FC<Props> = ({ group, onClose, onViewed, onToggleL
           .eq('question_id', q.id)
           .order('created_at', { ascending: false });
         setAnswers(
-          ((data as any[]) ?? []).map((a) => ({ id: a.id, name: a.profiles?.name ?? 'Kimdir', text: a.answer }))
+          ((data as any[]) ?? []).map((a) => ({ id: a.id, name: a.profiles?.name ?? 'Someone', text: a.answer }))
         );
       } catch {
         // javoblar yuklanmasa, bo'sh ro'yxat ko'rsatiladi
@@ -420,9 +420,9 @@ const StoryViewerModal: React.FC<Props> = ({ group, onClose, onViewed, onToggleL
         .insert({ story_id: current.id, question_id: qSheet.id, author_id: uid, answer: text });
       if (error) throw error;
       closeQuestion();
-      Alert.alert('Yuborildi', 'Javobingiz story egasiga yuborildi.');
+      Alert.alert('Success', 'Your answer has been sent to the story owner.');
     } catch {
-      Alert.alert('Xatolik', "Javobni yuborib bo'lmadi. Qaytadan urinib ko'ring.");
+      Alert.alert('Error', "Failed to submit answer. Please try again later.");
     } finally {
       setQSending(false);
     }
@@ -450,7 +450,7 @@ const StoryViewerModal: React.FC<Props> = ({ group, onClose, onViewed, onToggleL
       if (error && error.code !== '23505') throw error;
     } catch {
       setPollRes((p) => ({ ...p, [pollId]: prev ?? { a: 0, b: 0, mine: null } }));
-      Alert.alert('Xatolik', "Ovoz berib bo'lmadi. Qaytadan urinib ko'ring.");
+      Alert.alert('Error', "Failed to submit vote. Please try again later.");
     }
   };
 
@@ -458,14 +458,14 @@ const StoryViewerModal: React.FC<Props> = ({ group, onClose, onViewed, onToggleL
     if (!/^https?:\/\//i.test(url)) return;
     pauseTimer();
     Alert.alert(
-      'Havolani ochasizmi?',
+      'Open Link?',
       url,
       [
-        { text: 'Bekor qilish', style: 'cancel', onPress: resumeTimer },
+        { text: 'Cancel', style: 'cancel', onPress: resumeTimer },
         {
-          text: 'Ochish',
+          text: 'Open',
           onPress: () => {
-            Linking.openURL(url).catch(() => Alert.alert('Xatolik', "Havolani ochib bo'lmadi."));
+            Linking.openURL(url).catch(() => Alert.alert('Error', "Failed to open link."));
             resumeTimer();
           },
         },
@@ -568,7 +568,7 @@ const StoryViewerModal: React.FC<Props> = ({ group, onClose, onViewed, onToggleL
           {opt(p.optionA, 'A', r.a)}
           {opt(p.optionB, 'B', r.b)}
         </View>
-        {showResults && <Text style={styles.pollTotal}>{total} ovoz</Text>}
+        {showResults && <Text style={styles.pollTotal}>{total} votes</Text>}
       </View>
     );
   };
@@ -734,7 +734,7 @@ const StoryViewerModal: React.FC<Props> = ({ group, onClose, onViewed, onToggleL
             {current.privacy === 'close_friends' && (
               <View style={styles.friendsBadge}>
                 <Users2 size={11} color="#fff" strokeWidth={2.6} />
-                <Text style={styles.friendsBadgeText}>Yaqin do'stlar</Text>
+                <Text style={styles.friendsBadgeText}>Close Friends</Text>
               </View>
             )}
             <TouchableOpacity onPress={onClose} style={styles.closeBtn} hitSlop={10}>
@@ -784,7 +784,7 @@ const StoryViewerModal: React.FC<Props> = ({ group, onClose, onViewed, onToggleL
                     style={{ maxHeight: 260 }}
                     data={answers}
                     keyExtractor={(a) => a.id}
-                    ListEmptyComponent={<Text style={styles.sheetEmptyText}>Hozircha javob yo'q</Text>}
+                    ListEmptyComponent={<Text style={styles.sheetEmptyText}>No answers yet</Text>}
                     renderItem={({ item }) => (
                       <View style={styles.answerRow}>
                         <Text style={styles.answerName}>{item.name}</Text>
@@ -826,13 +826,13 @@ const StoryViewerModal: React.FC<Props> = ({ group, onClose, onViewed, onToggleL
             <View style={styles.sheetHandle} />
             <View style={styles.sheetHeaderRow}>
               <Eye size={16} color={colors.text} strokeWidth={2.5} />
-              <Text style={styles.sheetTitle}>{`${viewers.length} kishi ko'rdi`}</Text>
+              <Text style={styles.sheetTitle}>{`${viewers.length} people viewed`}</Text>
             </View>
             <FlatList
               data={viewers}
               keyExtractor={(v) => v.id}
               contentContainerStyle={{ paddingVertical: spacing.sm }}
-              ListEmptyComponent={<Text style={styles.sheetEmptyText}>Hozircha hech kim ko'rmagan</Text>}
+              ListEmptyComponent={<Text style={styles.sheetEmptyText}>No viewers yet</Text>}
               renderItem={({ item }) => (
                 <View style={styles.viewerRow}>
                   <Avatar emoji={item.emoji ?? undefined} color={item.color ?? undefined} size={32} />
