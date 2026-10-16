@@ -282,13 +282,58 @@ export function profileUpdatesToRow(updates: Partial<UserProfile>) {
   return row;
 }
 
+// =====================================================================
+// World special days
+// =====================================================================
+
+const EVENT_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})/;
+
+const SPECIAL_DAY_CATEGORIES: ReadonlyArray<NonNullable<WorldSpecialDay['category']>> = [
+  'national',
+  'religious',
+  'international',
+  'seasonal',
+  'observance',
+];
+
+/**
+ * Reads year/month/day from `event_date`. Works for both a plain date
+ * ("2026-01-01") and a timestamp ("2026-01-01T00:00:00+00:00"); the date is
+ * taken straight from the string, so the device time zone can't shift it.
+ */
+function parseEventDate(value?: string | null): { year: number; month: number; day: number } | null {
+  const m = EVENT_DATE_RE.exec(value ?? '');
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { year, month, day };
+}
+
+const warnedBadDates = new Set<string>();
+
 export function worldSpecialDayFromRow(row: WorldHolidayRow): WorldSpecialDay {
-  const d = new Date(row.event_date + 'T00:00:00');
+  const parsed = parseEventDate(row.event_date);
+
+  if (!parsed && __DEV__ && !warnedBadDates.has(row.id)) {
+    warnedBadDates.add(row.id);
+    console.warn('worldSpecialDayFromRow: unreadable event_date', row.id, row.name, row.event_date);
+  }
+
+  const category = SPECIAL_DAY_CATEGORIES.find((c) => c === row.category);
+
   return {
     id: row.id,
     name: row.name,
-    month: d.getMonth() + 1,
-    day: d.getDate(),
+    localName: row.local_name ?? null,
+    // 0 marks an unreadable date; screens drop such rows with isValidSpecialDay().
+    month: parsed?.month ?? 0,
+    day: parsed?.day ?? 0,
+    year: parsed?.year,
     emoji: row.emoji,
+    icon: row.icon ?? undefined,
+    category,
+    countryCode: row.country_code || 'GLOBAL',
   };
 }

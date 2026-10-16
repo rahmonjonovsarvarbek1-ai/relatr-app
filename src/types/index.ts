@@ -120,6 +120,13 @@ export interface UserProfile {
   // --------------------------------------
 }
 
+export type SpecialDayCategory =
+  | 'national'
+  | 'religious'
+  | 'international'
+  | 'seasonal'
+  | 'observance';
+
 export interface WorldSpecialDay {
   id: string;
   name: string;                 // English nomi
@@ -129,7 +136,7 @@ export interface WorldSpecialDay {
   year?: number;                // keyingi uchraydigan sana yili
   emoji?: string;               // eski ustun, endi ishlatilmaydi
   icon?: string;                // Ionicons nomi, masalan 'flag-outline'
-  category?: 'national' | 'religious' | 'international' | 'seasonal' | 'observance';
+  category?: SpecialDayCategory;
   countryCode?: string;         // 'UZ', 'US', ... yoki 'GLOBAL'
 }
 
@@ -287,18 +294,26 @@ export interface BlockedUserRow {
   created_at: string;
 }
 
+// `world_holidays` jadvali (Nager.Date sinxronizatsiyasi yozadi).
+// Sana `month` / `day` / `year` ustunlarida saqlanadi.
 export interface WorldHolidayRow {
   id: string;
-  google_event_id: string;
-  country_code: string;
+  external_id?: string | null;
   name: string;
-  description: string | null;
   emoji: string;
-  event_date: string;
-  is_recurring_yearly: boolean;
-  source: string;
-  html_link: string | null;
-  created_at: string;
+  month: number;
+  day: number;
+  year?: number | null;
+  country_code: string;
+  source?: string | null;
+
+  // Ixtiyoriy / eski ustunlar (bazada bo'lmasligi mumkin)
+  local_name?: string | null;
+  icon?: string | null;
+  category?: SpecialDayCategory | null;
+  description?: string | null;
+  event_date?: string | null;
+  created_at?: string;
 }
 
 // ---------------- NEW: App Contacts ----------------
