@@ -8,7 +8,6 @@ import {
   RefreshControl,
   ActivityIndicator,
   Image,
-  TextInput,
 } from 'react-native';
 import * as Location from 'expo-location';
 import { useApp } from '../context/AppContext';
@@ -18,7 +17,6 @@ import type { ColorScheme } from '../theme/theme';
 import { useTheme } from '../context/ThemeContext';
 import Avatar from '../components/Avatar';
 import { Card, SectionHeader } from '../components/Card';
-import Chip from '../components/Chip';
 import {
   daysUntilNextOccurrence,
   formatRelativeDay,
@@ -26,6 +24,8 @@ import {
   getAgeTurning,
   MONTH_NAMES,
 } from '../utils/dateUtils';
+import { dedupeSpecialDays, toDetailParams, withNextDate } from '../utils/specialDays';
+import type { UpcomingSpecialDay } from '../utils/specialDays';
 import { supabase } from '../utils/supabase';
 import { worldSpecialDayFromRow } from '../utils/mappers';
 import { WorldHolidayRow, WorldSpecialDay } from '../types';
@@ -34,6 +34,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 type TabKey = 'friends' | 'world';
+
+// How many special days the "World Special Days" tab previews before the
+// user opens the full-screen list.
+const WORLD_PREVIEW_COUNT = 3;
 
 interface FriendUpcomingItem {
   friendId: string;
@@ -329,15 +333,6 @@ const NearbySuggestions: React.FC<{
   );
 };
 
-const COUNTRY_OPTIONS: { code: string; label: string }[] = [
-  { code: 'GLOBAL', label: 'Global' },
-  { code: 'UZ', label: 'Uzbekistan' },
-  { code: 'US', label: 'USA' },
-  { code: 'GB', label: 'UK' },
-  { code: 'RU', label: 'Russia' },
-  { code: 'TR', label: 'Turkey' },
-];
-
 const DatesScreen: React.FC = () => {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -350,8 +345,6 @@ const DatesScreen: React.FC = () => {
   const [worldError, setWorldError] = useState<string | null>(null);
   const [syncWarning, setSyncWarning] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [countryFilter, setCountryFilter] = useState('GLOBAL');
-  const [worldSearch, setWorldSearch] = useState('');
 
   const isMountedRef = useRef(true);
   useEffect(() => {
@@ -454,35 +447,16 @@ const DatesScreen: React.FC = () => {
     return rows.sort((a, b) => a.days - b.days);
   }, [friends]);
 
-  const worldFiltered = useMemo(() => {
-    const q = worldSearch.trim().toLowerCase();
-    return worldSpecialDays.filter((w) => {
-      const countryCode = (w as WorldSpecialDay & { countryCode?: string }).countryCode ?? 'GLOBAL';
-
-      const matchesCountry =
-        countryFilter === 'GLOBAL' || countryCode === 'GLOBAL' || countryCode === countryFilter;
-      if (!matchesCountry) return false;
-
-      if (!q) return true;
-      return w.name.toLowerCase().includes(q);
-    });
-  }, [worldSpecialDays, countryFilter, worldSearch]);
-
-  const worldUpcoming = useMemo(() => {
-    return worldFiltered
-      .map((w) => {
-        const now = new Date();
-        const currentYear = now.getFullYear();
-        const thisYear = new Date(currentYear, w.month - 1, w.day);
-        thisYear.setHours(0, 0, 0, 0);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const year = thisYear < today ? currentYear + 1 : currentYear;
-        const isoGuess = `${year}-${String(w.month).padStart(2, '0')}-${String(w.day).padStart(2, '0')}`;
-        return { ...w, days: daysUntilNextOccurrence(isoGuess), isoGuess };
-      })
-      .sort((a, b) => a.days - b.days);
-  }, [worldFiltered]);
+  // The full list (search, country filter, sections) lives in the
+  // WorldSpecialDays screen; here we only need the nearest few.
+  const worldPreview = useMemo<UpcomingSpecialDay[]>(
+    () =>
+      dedupeSpecialDays(worldSpecialDays)
+        .map(withNextDate)
+        .sort((a: { days: number; }, b: { days: number; }) => a.days - b.days)
+        .slice(0, WORLD_PREVIEW_COUNT),
+    [worldSpecialDays],
+  );
 
   const soonest = friendUpcoming.slice(0, 3);
 
@@ -492,6 +466,17 @@ const DatesScreen: React.FC = () => {
         screen: 'FriendProfile',
         params: { friendId },
       });
+    },
+    [navigation],
+  );
+
+  const openWorldScreen = useCallback(() => {
+    navigation.navigate('WorldSpecialDays');
+  }, [navigation]);
+
+  const openSpecialDay = useCallback(
+    (d: UpcomingSpecialDay) => {
+      navigation.navigate('SpecialDayDetail', toDetailParams(d));
     },
     [navigation],
   );
@@ -635,40 +620,6 @@ const DatesScreen: React.FC = () => {
           </View>
         ) : (
           <View>
-            <View style={styles.searchWrap}>
-              <Ionicons name="search" size={16} color={colors.textFaint} />
-              <TextInput
-                placeholder="Search special days"
-                placeholderTextColor={colors.textFaint}
-                style={styles.searchInput}
-                value={worldSearch}
-                onChangeText={setWorldSearch}
-                accessibilityLabel="Search special days"
-                returnKeyType="search"
-              />
-              {worldSearch.length > 0 && (
-                <TouchableOpacity onPress={() => setWorldSearch('')} hitSlop={8} accessibilityLabel="Clear search">
-                  <Ionicons name="close-circle" size={16} color={colors.textFaint} />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={{ flexGrow: 0, marginBottom: spacing.sm }}
-              contentContainerStyle={{ paddingVertical: spacing.xs }}
-            >
-              {COUNTRY_OPTIONS.map((c) => (
-                <Chip
-                  key={c.code}
-                  label={c.label}
-                  active={countryFilter === c.code}
-                  onPress={() => setCountryFilter(c.code)}
-                />
-              ))}
-            </ScrollView>
-
             {syncWarning && !isLoadingWorld && (
               <Text style={styles.warning}>{syncWarning}</Text>
             )}
@@ -684,27 +635,47 @@ const DatesScreen: React.FC = () => {
                   <Text style={styles.retryText}>Try Again</Text>
                 </TouchableOpacity>
               </View>
-            ) : worldUpcoming.length === 0 ? (
+            ) : worldPreview.length === 0 ? (
               <Text style={styles.empty}>No world special days found.</Text>
             ) : (
-              worldUpcoming.map((w) => (
-                <View key={w.id} style={styles.row}>
-                  <View style={styles.worldEmojiWrap}>
-                    <Text style={{ fontSize: 22 }}>{w.emoji}</Text>
-                  </View>
-                  <View style={{ flex: 1, marginLeft: spacing.sm }}>
-                    <Text style={styles.rowTitle} numberOfLines={1}>
-                      {w.name}
+              <>
+                {worldPreview.map((w) => (
+                  <TouchableOpacity
+                    key={w.id}
+                    style={styles.row}
+                    onPress={() => openSpecialDay(w)}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${w.name}, ${MONTH_NAMES[w.month - 1]} ${w.day}`}
+                  >
+                    <View style={styles.worldEmojiWrap}>
+                      <Text style={{ fontSize: 22 }}>{w.emoji}</Text>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                      <Text style={styles.rowTitle} numberOfLines={1}>
+                        {w.name}
+                      </Text>
+                      <Text style={styles.rowSub}>
+                        {MONTH_NAMES[w.month - 1]} {w.day}
+                      </Text>
+                    </View>
+                    <Text style={[styles.rowDays, w.days === 0 && styles.rowDaysToday]}>
+                      {w.days === 0 ? 'Today' : formatRelativeDay(w.days)}
                     </Text>
-                    <Text style={styles.rowSub}>
-                      {MONTH_NAMES[w.month - 1]} {w.day}
-                    </Text>
-                  </View>
-                  <Text style={[styles.rowDays, w.days === 0 && styles.rowDaysToday]}>
-                    {w.days === 0 ? 'Today' : formatRelativeDay(w.days)}
-                  </Text>
-                </View>
-              ))
+                  </TouchableOpacity>
+                ))}
+
+                <TouchableOpacity
+                  style={styles.seeAllBtn}
+                  onPress={openWorldScreen}
+                  activeOpacity={0.85}
+                  accessibilityRole="button"
+                  accessibilityLabel="See all world special days"
+                >
+                  <Text style={styles.retryText}>See all special days</Text>
+                  <Ionicons name="chevron-forward" size={14} color={colors.bg} />
+                </TouchableOpacity>
+              </>
             )}
           </View>
         )}
@@ -774,23 +745,6 @@ const makeStyles = (colors: ColorScheme) =>
       alignItems: 'center',
       justifyContent: 'center',
     },
-    searchWrap: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: colors.cardAlt,
-      borderRadius: radius.md,
-      paddingHorizontal: spacing.md,
-      borderWidth: 1,
-      borderColor: colors.border,
-      marginBottom: spacing.sm,
-    },
-    searchInput: {
-      flex: 1,
-      color: colors.text,
-      paddingVertical: spacing.sm,
-      paddingLeft: spacing.sm,
-      ...typography.body,
-    },
     warning: {
       ...typography.caption,
       color: colors.gold,
@@ -819,6 +773,18 @@ const makeStyles = (colors: ColorScheme) =>
       borderRadius: radius.pill,
     },
     retryText: { ...typography.caption, color: colors.bg, fontWeight: '700' },
+    seeAllBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 4,
+      alignSelf: 'center',
+      marginTop: spacing.lg,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.sm + 2,
+      backgroundColor: colors.primary,
+      borderRadius: radius.pill,
+    },
     nearbyHeaderRow: {
       flexDirection: 'row',
       alignItems: 'center',

@@ -122,10 +122,26 @@ export interface UserProfile {
 
 export interface WorldSpecialDay {
   id: string;
-  name: string;
-  month: number; // 1-12
+  name: string;                 // English nomi
+  localName?: string | null;    // mahalliy tildagi nomi
+  month: number;                // 1-12
   day: number;
-  emoji: string;
+  year?: number;                // keyingi uchraydigan sana yili
+  emoji?: string;               // eski ustun, endi ishlatilmaydi
+  icon?: string;                // Ionicons nomi, masalan 'flag-outline'
+  category?: 'national' | 'religious' | 'international' | 'seasonal' | 'observance';
+  countryCode?: string;         // 'UZ', 'US', ... yoki 'GLOBAL'
+}
+
+export interface SpecialDayDetails {
+  holiday_id: string;
+  title: string | null;
+  summary: string | null;
+  description: string | null;
+  image_urls: string[] | null;
+  source_name: string | null;
+  source_url: string | null;
+  fetched_at: string;
 }
 
 // =====================================================================

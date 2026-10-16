@@ -1,8 +1,17 @@
 import React from 'react';
-import { View, ActivityIndicator } from 'react-native';
-import { NavigationContainer, DarkTheme } from '@react-navigation/native';
+import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import {
+  NavigationContainer,
+  DarkTheme,
+  type NavigatorScreenParams,
+  type Theme,
+} from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import {
+  createNativeStackNavigator,
+  type NativeStackNavigationOptions,
+} from '@react-navigation/native-stack';
+
 import { colors } from '../theme/theme';
 import LiquidGlassTabBar from '../components/LiquidGlassTabBar';
 import { useAuth } from '../context/AuthContext';
@@ -17,25 +26,76 @@ import ProfileScreen from '../screens/ProfileScreen';
 import StoriesScreen from '../screens/StoriesScreen';
 import LoginScreen from '../screens/LoginScreen';
 import OnboardingFlow from '../screens/onboarding/OnboardingFlow';
+import WorldSpecialDays from '../screens/WorldSpecialDays';
+import SpecialDayDetail from '../screens/SpecialDayDetail';
 
-const Tab = createBottomTabNavigator();
-const RootStack = createNativeStackNavigator();
+/* -------------------------------------------------------------------------- */
+/*  Navigatsiya tiplari                                                       */
+/* -------------------------------------------------------------------------- */
 
-const MainTabs = () => (
-  <Tab.Navigator
-    tabBar={(props) => <LiquidGlassTabBar {...props} />}
-    screenOptions={{
-      headerShown: false,
-    }}
-  >
-    <Tab.Screen name="DatesTab" component={DatesScreen} options={{ title: 'Dates' }} />
-    <Tab.Screen name="FriendsTab" component={FriendsListScreen} options={{ title: 'Friends' }} />
-    <Tab.Screen name="StoryTab" component={StoriesScreen} options={{ title: 'My Story' }} />
-    <Tab.Screen name="ProfileTab" component={ProfileScreen} options={{ title: 'Profile' }} />
-  </Tab.Navigator>
-);
+export type MainTabParamList = {
+  DatesTab: undefined;
+  FriendsTab: undefined;
+  StoryTab: undefined;
+  ProfileTab: undefined;
+};
 
-const navTheme = {
+export type SpecialDayDetailParams = {
+  dayId: string;
+  name: string;
+  localName?: string | null;
+  icon?: string | null;
+  category?: string | null;
+  month?: number | null;
+  day?: number | null;
+  isoDate: string | null;
+  countryCode: string;
+  countryLabel: string;
+};
+
+export type RootStackParamList = {
+  // Auth oqimi
+  Login: undefined;
+  Onboarding: undefined;
+
+  // Asosiy ilova
+  MainTabs: NavigatorScreenParams<MainTabParamList> | undefined;
+  FriendProfile: { friendId?: string } | undefined;
+  ContactProfile: { contactId?: string } | undefined;
+  AddFriend: undefined;
+  WorldSpecialDays: undefined;
+  SpecialDayDetail: SpecialDayDetailParams;
+};
+
+// `useNavigation()` ni har joyda generic'siz tiplash uchun.
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace ReactNavigation {
+    interface RootParamList extends RootStackParamList {}
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Navigatorlar va umumiy sozlamalar                                         */
+/* -------------------------------------------------------------------------- */
+
+const Tab = createBottomTabNavigator<MainTabParamList>();
+const RootStack = createNativeStackNavigator<RootStackParamList>();
+
+const stackScreenOptions: NativeStackNavigationOptions = {
+  headerShown: false,
+};
+
+const cardOptions: NativeStackNavigationOptions = {
+  presentation: 'card',
+  animation: 'slide_from_right',
+};
+
+const modalOptions: NativeStackNavigationOptions = {
+  presentation: 'modal',
+};
+
+const navTheme: Theme = {
   ...DarkTheme,
   colors: {
     ...DarkTheme.colors,
@@ -47,69 +107,101 @@ const navTheme = {
   },
 };
 
+/* -------------------------------------------------------------------------- */
+/*  Pastki tablar                                                             */
+/* -------------------------------------------------------------------------- */
+
+const MainTabs: React.FC = () => (
+  <Tab.Navigator
+    tabBar={(props) => <LiquidGlassTabBar {...props} />}
+    screenOptions={{ headerShown: false }}
+  >
+    <Tab.Screen name="DatesTab" component={DatesScreen} options={{ title: 'Dates' }} />
+    <Tab.Screen name="FriendsTab" component={FriendsListScreen} options={{ title: 'Friends' }} />
+    <Tab.Screen name="StoryTab" component={StoriesScreen} options={{ title: 'My Story' }} />
+    <Tab.Screen name="ProfileTab" component={ProfileScreen} options={{ title: 'Profile' }} />
+  </Tab.Navigator>
+);
+
+/* -------------------------------------------------------------------------- */
+/*  Loader                                                                    */
+/* -------------------------------------------------------------------------- */
+
 const FullScreenLoader: React.FC = () => (
-  <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' }}>
+  <View style={styles.loader}>
     <ActivityIndicator color={colors.primary} size="large" />
   </View>
 );
+
+/* -------------------------------------------------------------------------- */
+/*  Root navigator                                                            */
+/* -------------------------------------------------------------------------- */
 
 const RootNavigator: React.FC = () => {
   const { session, initializing } = useAuth();
   const { profile, loading: profileLoading } = useApp();
 
-  // 1) Auth holati aniqlanmaguncha kutamiz (splash o'rniga oddiy loader).
-  if (initializing) {
+  // Auth yoki profil yuklanayotgan paytda loader ko'rsatamiz.
+  // Container render qilinmaydi, shuning uchun noto'g'ri ekranga o'tish bo'lmaydi.
+  if (initializing || (session && profileLoading)) {
     return <FullScreenLoader />;
   }
 
-  // 2) Sessiya yo'q -> Login/Sign up ekrani.
-  if (!session) {
-    return (
-      <NavigationContainer theme={navTheme}>
-        <LoginScreen />
-      </NavigationContainer>
-    );
-  }
+  const isSignedIn = !!session;
+  const needsOnboarding = isSignedIn && !profile?.onboardingCompleted;
 
-  // 3) Sessiya bor, lekin profil ma'lumotlari hali yuklanmoqda.
-  if (profileLoading) {
-    return <FullScreenLoader />;
-  }
-
-  // 4) Yangi foydalanuvchi (onboarding tugallanmagan) -> onboarding oqimi.
-  //    `onboardingCompleted` UserProfile tipiga va `profiles` jadvaliga
-  //    qo'shilishi kerak (pastdagi SQL bo'limiga qarang).
-  if (!profile.onboardingCompleted) {
-    return (
-      <NavigationContainer theme={navTheme}>
-        <OnboardingFlow />
-      </NavigationContainer>
-    );
-  }
-
-  // 5) Hammasi tayyor -> asosiy ilova.
   return (
     <NavigationContainer theme={navTheme}>
-      <RootStack.Navigator screenOptions={{ headerShown: false }}>
-        <RootStack.Screen name="MainTabs" component={MainTabs} />
-        <RootStack.Screen
-          name="FriendProfile"
-          component={FriendProfileScreen}
-          options={{ presentation: 'card' }}
-        />
-        <RootStack.Screen
-          name="ContactProfile"
-          component={ContactProfileScreen}
-          options={{ presentation: 'card' }}
-        />
-        <RootStack.Screen
-          name="AddFriend"
-          component={AddFriendScreen}
-          options={{ presentation: 'modal' }}
-        />
+      <RootStack.Navigator screenOptions={stackScreenOptions}>
+        {!isSignedIn ? (
+          // 1) Sessiya yo'q -> Login / Sign up
+          <RootStack.Screen name="Login" component={LoginScreen} />
+        ) : needsOnboarding ? (
+          // 2) Sessiya bor, lekin onboarding tugallanmagan
+          <RootStack.Screen name="Onboarding" component={OnboardingFlow} />
+        ) : (
+          // 3) Hammasi tayyor -> asosiy ilova
+          <>
+            <RootStack.Screen name="MainTabs" component={MainTabs} />
+            <RootStack.Screen
+              name="FriendProfile"
+              component={FriendProfileScreen}
+              options={cardOptions}
+            />
+            <RootStack.Screen
+              name="ContactProfile"
+              component={ContactProfileScreen}
+              options={cardOptions}
+            />
+            <RootStack.Screen
+              name="WorldSpecialDays"
+              component={WorldSpecialDays}
+              options={cardOptions}
+            />
+            <RootStack.Screen
+              name="SpecialDayDetail"
+              component={SpecialDayDetail}
+              options={cardOptions}
+            />
+            <RootStack.Screen
+              name="AddFriend"
+              component={AddFriendScreen}
+              options={modalOptions}
+            />
+          </>
+        )}
       </RootStack.Navigator>
     </NavigationContainer>
   );
 };
+
+const styles = StyleSheet.create({
+  loader: {
+    flex: 1,
+    backgroundColor: colors.bg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
 
 export default RootNavigator;
