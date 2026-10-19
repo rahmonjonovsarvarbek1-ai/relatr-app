@@ -296,10 +296,18 @@ const SPECIAL_DAY_CATEGORIES: ReadonlyArray<NonNullable<WorldSpecialDay['categor
   'observance',
 ];
 
+const isValidMonthDay = (month: unknown, day: unknown): boolean =>
+  Number.isInteger(month) &&
+  Number.isInteger(day) &&
+  (month as number) >= 1 &&
+  (month as number) <= 12 &&
+  (day as number) >= 1 &&
+  (day as number) <= 31;
+
 /**
- * Reads year/month/day from `event_date`. Works for both a plain date
- * ("2026-01-01") and a timestamp ("2026-01-01T00:00:00+00:00"); the date is
- * taken straight from the string, so the device time zone can't shift it.
+ * Legacy fallback: reads year/month/day from `event_date`. Works for a plain date
+ * ("2026-01-01") and a timestamp ("2026-01-01T00:00:00+00:00"); the date is taken
+ * straight from the string, so the device time zone can't shift it.
  */
 function parseEventDate(value?: string | null): { year: number; month: number; day: number } | null {
   const m = EVENT_DATE_RE.exec(value ?? '');
@@ -307,18 +315,30 @@ function parseEventDate(value?: string | null): { year: number; month: number; d
   const year = Number(m[1]);
   const month = Number(m[2]);
   const day = Number(m[3]);
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  return { year, month, day };
+  return isValidMonthDay(month, day) ? { year, month, day } : null;
 }
 
 const warnedBadDates = new Set<string>();
 
 export function worldSpecialDayFromRow(row: WorldHolidayRow): WorldSpecialDay {
-  const parsed = parseEventDate(row.event_date);
+  // The sync writes month / day / year columns; `event_date` is only a legacy fallback.
+  let month = row.month;
+  let day = row.day;
+  let year: number | undefined = typeof row.year === 'number' ? row.year : undefined;
 
-  if (!parsed && __DEV__ && !warnedBadDates.has(row.id)) {
-    warnedBadDates.add(row.id);
-    console.warn('worldSpecialDayFromRow: unreadable event_date', row.id, row.name, row.event_date);
+  if (!isValidMonthDay(month, day)) {
+    const parsed = parseEventDate(row.event_date);
+    if (parsed) {
+      ({ month, day, year } = parsed);
+    } else {
+      month = 0; // 0 marks an unreadable date; screens drop such rows
+      day = 0;
+      year = undefined;
+      if (__DEV__ && !warnedBadDates.has(row.id)) {
+        warnedBadDates.add(row.id);
+        console.warn('worldSpecialDayFromRow: no readable date', row.id, row.name);
+      }
+    }
   }
 
   const category = SPECIAL_DAY_CATEGORIES.find((c) => c === row.category);
@@ -327,11 +347,10 @@ export function worldSpecialDayFromRow(row: WorldHolidayRow): WorldSpecialDay {
     id: row.id,
     name: row.name,
     localName: row.local_name ?? null,
-    // 0 marks an unreadable date; screens drop such rows with isValidSpecialDay().
-    month: parsed?.month ?? 0,
-    day: parsed?.day ?? 0,
-    year: parsed?.year,
-    emoji: row.emoji,
+    month,
+    day,
+    year,
+    emoji: row.emoji ?? undefined,
     icon: row.icon ?? undefined,
     category,
     countryCode: row.country_code || 'GLOBAL',

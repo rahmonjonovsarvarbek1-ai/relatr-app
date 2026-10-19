@@ -25,8 +25,9 @@ import type { ColorScheme } from '../theme/theme';
 import { formatRelativeDay, MONTH_NAMES } from '../utils/dateUtils';
 import SpecialDayIcon from '../components/SpecialDayIcon';
 import { supabase } from '../utils/supabase';
-import { categoryLabel, daysUntilDate } from '../utils/specialDays';
+import { categoryLabel, daysUntilDate, validIsoDate } from '../utils/specialDays';
 import type { SpecialDayParams } from '../utils/specialDays';
+import { fetchReminderIds, setSpecialDayReminder } from '../utils/specialDayReminders';
 import type { SpecialDayDetails } from '../types';
 
 const HERO_HEIGHT = 300;
@@ -34,15 +35,15 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const TTL_WITH_CONTENT_MS = 30 * DAY_MS;
 const TTL_EMPTY_MS = 3 * DAY_MS; // retry sooner if nothing was found last time
 const COLLAPSED_CHARS = 280;
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const HTTP_URL_RE = /^https?:\/\//i;
 
 const hasContent = (d: SpecialDayDetails) => !!(d.summary || d.description || d.image_urls?.length);
-const isStale = (d: SpecialDayDetails) =>
-  Date.now() - new Date(d.fetched_at).getTime() > (hasContent(d) ? TTL_WITH_CONTENT_MS : TTL_EMPTY_MS);
 
-/** Returns the value only if it is a real YYYY-MM-DD date, otherwise null (e.g. "2026-NaN-NaN"). */
-const validIsoDate = (value?: string | null): string | null =>
-  value && ISO_DATE_RE.test(value) && !Number.isNaN(Date.parse(value)) ? value : null;
+const isStale = (d: SpecialDayDetails) => {
+  const fetchedAt = Date.parse(d.fetched_at);
+  if (Number.isNaN(fetchedAt)) return true;
+  return Date.now() - fetchedAt > (hasContent(d) ? TTL_WITH_CONTENT_MS : TTL_EMPTY_MS);
+};
 
 /** Logs the real reason an Edge Function call failed (status + response body). */
 const logFunctionError = async (name: string, e: unknown) => {
@@ -68,7 +69,9 @@ const SpecialDayDetailScreen: React.FC = () => {
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
-  const p = route.params as SpecialDayParams;
+  const p = (route.params ?? {}) as Partial<SpecialDayParams>;
+  const dayId = p.dayId ? String(p.dayId) : null;
+  const name = p.name ?? 'Special day';
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const { session } = useAuth();
@@ -85,6 +88,7 @@ const SpecialDayDetailScreen: React.FC = () => {
 
   const pagerRef = useRef<ScrollView>(null);
   const isMountedRef = useRef(true);
+  const requestIdRef = useRef(0);
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
@@ -102,7 +106,7 @@ const SpecialDayDetailScreen: React.FC = () => {
 
   const daysLeft = useMemo(() => (isoDate ? daysUntilDate(isoDate) : null), [isoDate]);
   const countdown =
-    daysLeft === null
+    daysLeft === null || daysLeft < 0
       ? null
       : daysLeft === 0
         ? 'Today'
@@ -115,15 +119,24 @@ const SpecialDayDetailScreen: React.FC = () => {
   //    when nothing is cached yet or the cache is stale.
   const load = useCallback(
     async (force = false) => {
+      if (!dayId) {
+        setLoading(false);
+        setError('This special day could not be found.');
+        return;
+      }
+
+      const requestId = ++requestIdRef.current;
+      const isCurrent = () => isMountedRef.current && requestId === requestIdRef.current;
+
       setLoading(true);
       setError(null);
 
       const { data: cached, error: cacheError } = await supabase
         .from('world_special_day_details')
         .select('*')
-        .eq('holiday_id', p.dayId)
+        .eq('holiday_id', dayId)
         .maybeSingle();
-      if (!isMountedRef.current) return;
+      if (!isCurrent()) return;
       if (cacheError) console.error('read special day cache error:', cacheError);
 
       const cachedRow = (cached as SpecialDayDetails | null) ?? null;
@@ -136,66 +149,59 @@ const SpecialDayDetailScreen: React.FC = () => {
 
       try {
         const { data, error: fnError } = await supabase.functions.invoke('fetch-special-day-details', {
-        body: { holidayId: p.dayId, name: p.name, force },
+          body: { holidayId: dayId, name, force },
         });
-        if (!isMountedRef.current) return;
+        if (!isCurrent()) return;
         if (fnError) throw fnError;
         const fresh = (data as { details?: SpecialDayDetails } | null)?.details;
         if (fresh) setDetails(fresh);
         else if (!cachedRow) setError('No details came back. Try again in a moment.');
       } catch (e) {
         await logFunctionError('fetch-special-day-details', e);
-        if (isMountedRef.current && !cachedRow) {
+        if (isCurrent() && !cachedRow) {
           setError('Could not load details. Check your connection and try again.');
         }
       } finally {
-        if (isMountedRef.current) setLoading(false);
+        if (isCurrent()) setLoading(false);
       }
-      },
-    [p.dayId, p.name],
-     );
+    },
+    [dayId, name],
+  );
 
-     useEffect(() => {
-     load(false);
-     }, [load]);
+  useEffect(() => {
+    load(false);
+  }, [load]);
 
   // ---- Reminder -----------------------------------------------------------
   useEffect(() => {
-    if (!meId) return;
-    supabase
-      .from('special_day_reminders')
-      .select('id')
-      .eq('user_id', meId)
-      .eq('holiday_id', p.dayId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (isMountedRef.current) setReminderOn(!!data);
-      });
-  }, [meId, p.dayId]);
+    if (!meId || !dayId) return;
+    let cancelled = false;
+    fetchReminderIds(meId).then((ids) => {
+      if (!cancelled && ids) setReminderOn(ids.has(dayId));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [meId, dayId]);
 
   const toggleReminder = useCallback(async () => {
-    if (!meId || reminderBusy) return;
-    const had = reminderOn;
+    if (!meId || !dayId || reminderBusy) return;
+    const enable = !reminderOn;
     setReminderBusy(true);
-    setReminderOn(!had);
-    const { error: err } = had
-      ? await supabase.from('special_day_reminders').delete().eq('holiday_id', p.dayId).eq('user_id', meId)
-      : await supabase
-          .from('special_day_reminders')
-          .insert({ holiday_id: p.dayId, user_id: meId, remind_days_before: 1 });
+    setReminderOn(enable); // optimistic
+    const ok = await setSpecialDayReminder(meId, dayId, enable);
     if (!isMountedRef.current) return;
-    if (err) {
-      console.error('toggle reminder error:', err);
-      setReminderOn(had);
-    }
+    if (!ok) setReminderOn(!enable); // roll back
     setReminderBusy(false);
-  }, [meId, reminderBusy, reminderOn, p.dayId]);
+  }, [meId, dayId, reminderBusy, reminderOn]);
 
   // ---- Images -------------------------------------------------------------
-  const images = useMemo(
-    () => (details?.image_urls ?? []).filter((u) => !failedImages.has(u)),
-    [details, failedImages],
-  );
+  const images = useMemo(() => {
+    const urls = (details?.image_urls ?? []).filter((u) => HTTP_URL_RE.test(u));
+    return Array.from(new Set(urls)).filter((u) => !failedImages.has(u));
+  }, [details, failedImages]);
+
+  const activeIndex = Math.min(pageIndex, Math.max(images.length - 1, 0));
 
   const markFailed = useCallback((uri: string) => {
     setFailedImages((prev) => new Set(prev).add(uri));
@@ -206,9 +212,19 @@ const SpecialDayDetailScreen: React.FC = () => {
     setPageIndex(i);
   };
 
+  const openSource = useCallback(async (url: string) => {
+    if (!HTTP_URL_RE.test(url)) return;
+    try {
+      await Linking.openURL(url);
+    } catch (e) {
+      console.error('open source link error:', e);
+    }
+  }, []);
+
   const text = details?.description || details?.summary || '';
   const isLong = text.length > COLLAPSED_CHARS;
   const shownText = expanded || !isLong ? text : `${text.slice(0, COLLAPSED_CHARS).trimEnd()}…`;
+  const sourceUrl = details?.source_url ?? null;
 
   return (
     <View style={styles.safe}>
@@ -231,14 +247,14 @@ const SpecialDayDetailScreen: React.FC = () => {
                     style={{ width, height: HERO_HEIGHT, backgroundColor: colors.cardAlt }}
                     resizeMode="cover"
                     onError={() => markFailed(uri)}
-                    accessibilityLabel={`${p.name} photo`}
+                    accessibilityLabel={`${name} photo`}
                   />
                 ))}
               </ScrollView>
               {images.length > 1 && (
                 <View style={styles.dots} pointerEvents="none">
                   {images.map((uri, i) => (
-                    <View key={uri} style={[styles.dot, i === pageIndex && styles.dotActive]} />
+                    <View key={uri} style={[styles.dot, i === activeIndex && styles.dotActive]} />
                   ))}
                 </View>
               )}
@@ -264,6 +280,7 @@ const SpecialDayDetailScreen: React.FC = () => {
               onPress={toggleReminder}
               style={styles.roundBtn}
               hitSlop={8}
+              disabled={reminderBusy}
               accessibilityRole="button"
               accessibilityLabel={reminderOn ? 'Turn off reminder' : 'Remind me'}
             >
@@ -277,7 +294,7 @@ const SpecialDayDetailScreen: React.FC = () => {
         </View>
 
         <View style={styles.body}>
-          <Text style={styles.name}>{p.name}</Text>
+          <Text style={styles.name}>{name}</Text>
           {!!p.localName && <Text style={styles.localName}>{p.localName}</Text>}
 
           <View style={styles.metaRow}>
@@ -289,7 +306,7 @@ const SpecialDayDetailScreen: React.FC = () => {
             )}
             <View style={styles.metaPill}>
               <Ionicons name="globe-outline" size={14} color={colors.textDim} />
-              <Text style={styles.metaText}>{p.countryLabel}</Text>
+              <Text style={styles.metaText}>{p.countryLabel ?? 'Global'}</Text>
             </View>
             <View style={styles.metaPill}>
               <Ionicons name="pricetag-outline" size={14} color={colors.textDim} />
@@ -308,6 +325,7 @@ const SpecialDayDetailScreen: React.FC = () => {
             activeOpacity={0.85}
             disabled={reminderBusy}
             accessibilityRole="button"
+            accessibilityState={{ selected: reminderOn, busy: reminderBusy }}
           >
             <Ionicons
               name={reminderOn ? 'notifications' : 'notifications-outline'}
@@ -324,26 +342,28 @@ const SpecialDayDetailScreen: React.FC = () => {
           {error ? (
             <View>
               <Text style={styles.muted}>{error}</Text>
-              <TouchableOpacity onPress={() => load(true)} style={styles.retryBtn}>
-                <Text style={styles.retryText}>Try again</Text>
-              </TouchableOpacity>
+              {dayId && (
+                <TouchableOpacity onPress={() => load(true)} style={styles.retryBtn} accessibilityRole="button">
+                  <Text style={styles.retryText}>Try again</Text>
+                </TouchableOpacity>
+              )}
             </View>
           ) : text ? (
             <>
               <Text style={styles.paragraph}>{shownText}</Text>
               {isLong && (
-                <TouchableOpacity onPress={() => setExpanded((v) => !v)} hitSlop={8}>
+                <TouchableOpacity onPress={() => setExpanded((v) => !v)} hitSlop={8} accessibilityRole="button">
                   <Text style={styles.link}>{expanded ? 'Show less' : 'Read more'}</Text>
                 </TouchableOpacity>
               )}
-              {details?.source_url && (
+              {sourceUrl && HTTP_URL_RE.test(sourceUrl) && (
                 <TouchableOpacity
                   style={styles.sourceRow}
-                  onPress={() => Linking.openURL(details.source_url as string)}
+                  onPress={() => openSource(sourceUrl)}
                   accessibilityRole="link"
                 >
                   <Ionicons name="open-outline" size={14} color={colors.textDim} />
-                  <Text style={styles.sourceText}>Source: {details.source_name ?? 'Wikipedia'}</Text>
+                  <Text style={styles.sourceText}>Source: {details?.source_name ?? 'Wikipedia'}</Text>
                 </TouchableOpacity>
               )}
             </>
@@ -352,7 +372,7 @@ const SpecialDayDetailScreen: React.FC = () => {
           ) : (
             <View>
               <Text style={styles.muted}>We couldn't find a write-up for this day yet.</Text>
-              <TouchableOpacity onPress={() => load(true)} style={styles.retryBtn}>
+              <TouchableOpacity onPress={() => load(true)} style={styles.retryBtn} accessibilityRole="button">
                 <Text style={styles.retryText}>Search again</Text>
               </TouchableOpacity>
             </View>
@@ -372,7 +392,7 @@ const SpecialDayDetailScreen: React.FC = () => {
                   >
                     <Image
                       source={{ uri }}
-                      style={[styles.thumb, i === pageIndex && styles.thumbActive]}
+                      style={[styles.thumb, i === activeIndex && styles.thumbActive]}
                       onError={() => markFailed(uri)}
                     />
                   </TouchableOpacity>

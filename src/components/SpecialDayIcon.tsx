@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo, useMemo } from 'react';
 import { View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
@@ -6,11 +6,11 @@ import { useTheme } from '../context/ThemeContext';
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
 const FALLBACK_ICON: IoniconName = 'calendar-outline';
+const GLYPHS = Ionicons.glyphMap as Record<string, number>;
 
 /** Uses the icon name from the database if it exists in Ionicons, else a calendar. */
 export function resolveIcon(name?: string | null): IoniconName {
-  const glyphs = Ionicons.glyphMap as Record<string, number>;
-  return name && name in glyphs ? (name as IoniconName) : FALLBACK_ICON;
+  return name && name in GLYPHS ? (name as IoniconName) : FALLBACK_ICON;
 }
 
 interface Props {
@@ -31,16 +31,21 @@ const SpecialDayIcon: React.FC<Props> = ({ icon, category, size = 44 }) => {
         ? colors.textDim
         : colors.primary;
 
+  const containerStyle = useMemo(
+    () => ({
+      width: size,
+      height: size,
+      borderRadius: size / 2,
+      backgroundColor: tone + '22', // tone must be a #RRGGBB colour
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+    }),
+    [size, tone],
+  );
+
   return (
     <View
-      style={{
-        width: size,
-        height: size,
-        borderRadius: size / 2,
-        backgroundColor: tone + '22',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
+      style={containerStyle}
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
     >
@@ -49,4 +54,4 @@ const SpecialDayIcon: React.FC<Props> = ({ icon, category, size = 44 }) => {
   );
 };
 
-export default SpecialDayIcon;
+export default memo(SpecialDayIcon);

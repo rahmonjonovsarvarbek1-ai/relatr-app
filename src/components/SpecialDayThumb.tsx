@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { memo, useEffect, useMemo, useState } from 'react';
 import { Image } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useSpecialDayImage } from '../utils/specialDayImages';
@@ -9,13 +9,13 @@ interface Props {
   name: string;
   icon?: string | null;
   category?: string | null;
-  /** Kvadrat tomoni (default 44). */
+  /** Square side (default 44). */
   size?: number;
-  /** Burchak radiusi; berilmasa to'liq doira. */
+  /** Corner radius; a full circle when omitted. */
   borderRadius?: number;
 }
 
-/** Rasm topilsa Wikipedia rasmi, aks holda ikonka ko'rsatadi. */
+/** Shows the Wikipedia image when one exists, otherwise the category icon. */
 const SpecialDayThumb: React.FC<Props> = ({ id, name, icon, category, size = 44, borderRadius }) => {
   const { colors } = useTheme();
   const url = useSpecialDayImage(id, name);
@@ -25,16 +25,21 @@ const SpecialDayThumb: React.FC<Props> = ({ id, name, icon, category, size = 44,
     setFailed(false);
   }, [url]);
 
+  const style = useMemo(
+    () => ({
+      width: size,
+      height: size,
+      borderRadius: borderRadius ?? size / 2,
+      backgroundColor: colors.cardAlt,
+    }),
+    [size, borderRadius, colors.cardAlt],
+  );
+
   if (url && !failed) {
     return (
       <Image
         source={{ uri: url }}
-        style={{
-          width: size,
-          height: size,
-          borderRadius: borderRadius ?? size / 2,
-          backgroundColor: colors.cardAlt,
-        }}
+        style={style}
         resizeMode="cover"
         onError={() => setFailed(true)}
         accessibilityIgnoresInvertColors
@@ -45,4 +50,4 @@ const SpecialDayThumb: React.FC<Props> = ({ id, name, icon, category, size = 44,
   return <SpecialDayIcon icon={icon} category={category} size={size} />;
 };
 
-export default SpecialDayThumb;
+export default memo(SpecialDayThumb);

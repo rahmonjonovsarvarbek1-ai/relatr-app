@@ -17,6 +17,7 @@ import type { ColorScheme } from '../theme/theme';
 import { useTheme } from '../context/ThemeContext';
 import Avatar from '../components/Avatar';
 import { Card, SectionHeader } from '../components/Card';
+import SpecialDayThumb from '../components/SpecialDayThumb';
 import {
   daysUntilNextOccurrence,
   formatRelativeDay,
@@ -24,12 +25,17 @@ import {
   getAgeTurning,
   MONTH_NAMES,
 } from '../utils/dateUtils';
-import { dedupeSpecialDays, toDetailParams, withNextDate } from '../utils/specialDays';
+import {
+  buildUpcoming,
+  dedupeSpecialDays,
+  startOfToday,
+  toDetailParams,
+} from '../utils/specialDays';
 import type { UpcomingSpecialDay } from '../utils/specialDays';
 import { supabase } from '../utils/supabase';
 import { worldSpecialDayFromRow } from '../utils/mappers';
-import { WorldHolidayRow, WorldSpecialDay } from '../types';
-import { useNavigation } from '@react-navigation/native';
+import { FriendshipRow, WorldHolidayRow, WorldSpecialDay } from '../types';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -38,8 +44,11 @@ type TabKey = 'friends' | 'world';
 // How many special days the "World Special Days" tab previews before the
 // user opens the full-screen list.
 const WORLD_PREVIEW_COUNT = 3;
+const REALTIME_DEBOUNCE_MS = 600; // a sync writes many rows; refetch once, not per row
+const SYNC_COOLDOWN_MS = 5 * 60 * 1000; // don't force a server-side sync on every pull
 
 interface FriendUpcomingItem {
+  key: string;
   friendId: string;
   friendName: string;
   emoji: string;
@@ -53,19 +62,12 @@ interface FriendUpcomingItem {
 
 // ---------------------------------------------------------------------
 // Nearby real users — pulled from `profiles` by lat/lng proximity to the
-// current user, replacing the old fake/mock suggestion list. Excludes
-// self and anyone already an accepted friend/contact. Collapsible via a
-// show/hide toggle, matching "agar hohlasa uni show yoki close qilsa
-// boladigon" requirement.
+// current user. Excludes self and anyone already connected either way.
+// Collapsible via a show/hide toggle.
 //
-// NOTE (fix): the current user's own latitude/longitude must exist in
-// `profiles` before we can query anyone nearby. Previously nothing in
-// this screen ever requested location permission or wrote the
-// coordinates back to the `profiles` row, so `me.latitude`/`longitude`
-// were always null and the list stayed empty. We now request
-// foreground location permission and upsert the coordinates into
-// `profiles` at the start of `load()`, mirroring what the older
-// `expo-location` based component used to do against `user_locations`.
+// Our own coordinates are written to `profiles` before querying, so that
+// others can find us too. They are deliberately rounded to ~1 km: other
+// users can read these columns, so exact positions must not be stored.
 // ---------------------------------------------------------------------
 
 interface NearbyProfile {
@@ -73,16 +75,19 @@ interface NearbyProfile {
   name: string;
   username: string;
   emoji: string;
-  avatarColor: string;
+  avatarColor?: string;
   avatarUrl?: string;
   distanceKm: number;
 }
 
 const EARTH_RADIUS_KM = 6371;
+const NEARBY_RADIUS_KM = 50;
+const LAST_KNOWN_MAX_AGE_MS = 10 * 60 * 1000;
 
-function toRad(deg: number): number {
-  return (deg * Math.PI) / 180;
-}
+const toRad = (deg: number): number => (deg * Math.PI) / 180;
+
+/** ~1.1 km precision (2 decimals) — enough for "N km away", not enough to find a doorstep. */
+const roundCoord = (n: number): number => Math.round(n * 100) / 100;
 
 // Haversine distance in km between two lat/lng points.
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -91,8 +96,7 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return EARTH_RADIUS_KM * c;
+  return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 // Rough bounding box (in degrees) for a given radius, used to keep the
@@ -108,11 +112,7 @@ function boundingBox(lat: number, lng: number, radiusKm: number) {
   };
 }
 
-interface FriendshipRow {
-  user_id: string;
-  friend_id: string;
-  status: string;
-}
+type FriendshipPair = Pick<FriendshipRow, 'user_id' | 'friend_id' | 'status'>;
 
 interface ProfileCandidateRow {
   id: string;
@@ -147,6 +147,8 @@ const NearbySuggestions: React.FC<{
     };
   }, []);
 
+  // NOTE: must not depend on theme colours — a theme switch would otherwise
+  // re-request location and rewrite the profile row.
   const load = useCallback(async () => {
     if (!meId) return;
     setLoading(true);
@@ -154,9 +156,7 @@ const NearbySuggestions: React.FC<{
     setPermissionDenied(false);
 
     try {
-      // 1) Joylashuvga ruxsat so'raymiz — bu qism avval umuman yo'q edi,
-      //    shuning uchun `profiles.latitude/longitude` hech qachon
-      //    to'ldirilmagan va nearby ro'yxati doim bo'sh chiqqan.
+      // 1) Location permission (no prompt if it was already granted).
       const { status: permStatus } = await Location.requestForegroundPermissionsAsync();
       if (permStatus !== 'granted') {
         if (isMountedRef.current) {
@@ -166,30 +166,25 @@ const NearbySuggestions: React.FC<{
         return;
       }
 
-      // 2) Joriy koordinatani olamiz.
-      const pos = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
+      // 2) Current position: a recent cached fix is instant, otherwise ask the GPS.
+      const pos =
+        (await Location.getLastKnownPositionAsync({ maxAge: LAST_KNOWN_MAX_AGE_MS })) ??
+        (await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }));
 
       if (!isMountedRef.current) return;
 
-      const myLat = pos.coords.latitude;
-      const myLng = pos.coords.longitude;
+      const myLat = roundCoord(pos.coords.latitude);
+      const myLng = roundCoord(pos.coords.longitude);
 
-      // 3) O'z profilimizga lat/lng ni yozib/yangilab qo'yamiz, shunda
-      //    boshqalar ham bizni "nearby" sifatida topa oladi.
+      // 3) Publish our (rounded) position so others can find us as well.
       const { error: updateError } = await supabase
         .from('profiles')
         .update({ latitude: myLat, longitude: myLng })
         .eq('id', meId);
+      if (updateError) console.error('profiles location update error:', updateError);
 
-      if (updateError) {
-        console.error('profiles location update error:', updateError);
-      }
-
-      // 4) Atrofdagi profillar va do'stlik holatlarini olamiz.
-      const RADIUS_KM = 50;
-      const box = boundingBox(myLat, myLng, RADIUS_KM);
+      // 4) Nearby profiles + friendship state.
+      const box = boundingBox(myLat, myLng, NEARBY_RADIUS_KM);
 
       const [{ data: candidates, error: candError }, { data: friendRows, error: friendError }] =
         await Promise.all([
@@ -211,6 +206,7 @@ const NearbySuggestions: React.FC<{
       if (!isMountedRef.current) return;
 
       if (candError || friendError) {
+        console.error('nearby load error:', candError ?? friendError);
         setError('Could not load nearby people.');
         setNearby([]);
         setLoading(false);
@@ -221,22 +217,22 @@ const NearbySuggestions: React.FC<{
       // shouldn't clutter "nearby suggestions" — that's what the
       // Contacts flow on ProfileScreen is for.
       const excluded = new Set<string>();
-      ((friendRows as FriendshipRow[]) ?? []).forEach((f) => {
+      ((friendRows as FriendshipPair[] | null) ?? []).forEach((f) => {
         excluded.add(f.user_id === meId ? f.friend_id : f.user_id);
       });
 
-      const withDistance: NearbyProfile[] = ((candidates as ProfileCandidateRow[]) ?? [])
+      const withDistance: NearbyProfile[] = ((candidates as ProfileCandidateRow[] | null) ?? [])
         .filter((c) => c.latitude != null && c.longitude != null && !excluded.has(c.id))
         .map((c) => ({
           id: c.id,
           name: c.name,
           username: c.username,
           emoji: c.emoji ?? '🙂',
-          avatarColor: c.avatar_color ?? colors.primary,
+          avatarColor: c.avatar_color ?? undefined,
           avatarUrl: c.avatar_url ?? undefined,
           distanceKm: haversineKm(myLat, myLng, c.latitude as number, c.longitude as number),
         }))
-        .filter((c) => c.distanceKm <= RADIUS_KM)
+        .filter((c) => c.distanceKm <= NEARBY_RADIUS_KM)
         .sort((a, b) => a.distanceKm - b.distanceKm)
         .slice(0, 15);
 
@@ -249,7 +245,7 @@ const NearbySuggestions: React.FC<{
     } finally {
       if (isMountedRef.current) setLoading(false);
     }
-  }, [meId, colors.primary]);
+  }, [meId]);
 
   useEffect(() => {
     load();
@@ -269,11 +265,7 @@ const NearbySuggestions: React.FC<{
           accessibilityLabel={visible ? 'Hide nearby suggestions' : 'Show nearby suggestions'}
         >
           <Text style={styles.nearbyToggleText}>{visible ? 'Hide' : 'Show'}</Text>
-          <Ionicons
-            name={visible ? 'chevron-up' : 'chevron-down'}
-            size={14}
-            color={colors.textDim}
-          />
+          <Ionicons name={visible ? 'chevron-up' : 'chevron-down'} size={14} color={colors.textDim} />
         </TouchableOpacity>
       </View>
 
@@ -286,14 +278,14 @@ const NearbySuggestions: React.FC<{
               <Text style={styles.empty}>
                 Yaqin atrofdagilarni ko'rish uchun joylashuvga ruxsat bering.
               </Text>
-              <TouchableOpacity onPress={load} style={styles.retryBtn}>
+              <TouchableOpacity onPress={load} style={styles.retryBtn} accessibilityRole="button">
                 <Text style={styles.retryText}>Qayta urinish</Text>
               </TouchableOpacity>
             </View>
           ) : error ? (
             <View>
               <Text style={styles.empty}>{error}</Text>
-              <TouchableOpacity onPress={load} style={styles.retryBtn}>
+              <TouchableOpacity onPress={load} style={styles.retryBtn} accessibilityRole="button">
                 <Text style={styles.retryText}>Try Again</Text>
               </TouchableOpacity>
             </View>
@@ -311,11 +303,13 @@ const NearbySuggestions: React.FC<{
                   style={styles.nearbyCard}
                   activeOpacity={0.8}
                   onPress={() => onOpenProfile(p.id, p)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${p.name}, ${p.distanceKm < 1 ? 'less than 1' : Math.round(p.distanceKm)} km away`}
                 >
                   {p.avatarUrl ? (
                     <Image source={{ uri: p.avatarUrl }} style={styles.nearbyAvatarImage} />
                   ) : (
-                    <Avatar emoji={p.emoji} color={p.avatarColor} size={52} />
+                    <Avatar emoji={p.emoji} color={p.avatarColor ?? colors.primary} size={52} />
                   )}
                   <Text style={styles.nearbyName} numberOfLines={1}>
                     {p.name}
@@ -345,8 +339,11 @@ const DatesScreen: React.FC = () => {
   const [worldError, setWorldError] = useState<string | null>(null);
   const [syncWarning, setSyncWarning] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  // Re-evaluated on focus so countdowns stay correct if the app stays open past midnight.
+  const [todayMs, setTodayMs] = useState(() => startOfToday().getTime());
 
   const isMountedRef = useRef(true);
+  const lastForcedSyncRef = useRef(0);
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
@@ -354,77 +351,95 @@ const DatesScreen: React.FC = () => {
     };
   }, []);
 
+  useFocusEffect(
+    useCallback(() => {
+      setTodayMs(startOfToday().getTime());
+    }, []),
+  );
+
   const fetchWorldHolidays = useCallback(async () => {
     const { data, error } = await supabase.from('world_holidays').select('*');
     if (!isMountedRef.current) return;
 
     if (error) {
+      console.error('load world_holidays error:', error);
       setWorldError('Failed to load special days. Please try again.');
       return;
     }
     setWorldError(null);
-    setWorldSpecialDays(((data as WorldHolidayRow[] | null) ?? []).map(worldSpecialDayFromRow));
+    setWorldSpecialDays(
+      ((data as WorldHolidayRow[] | null) ?? []).map((row) => worldSpecialDayFromRow(row)),
+    );
   }, []);
 
+  // Regular background sync. No `year`/`force`: the server applies its own
+  // cooldown, so opening this screen repeatedly doesn't hammer the Nager API.
   const syncFromNager = useCallback(async (): Promise<void> => {
     try {
-      const { error } = await supabase.functions.invoke('sync-world-holidays', {
-        body: { year: new Date().getFullYear() },
-      });
+      const { data, error } = await supabase.functions.invoke('sync-world-holidays', { body: {} });
       if (!isMountedRef.current) return;
       if (error) {
         console.error('sync-world-holidays returned error:', error.message);
         setSyncWarning('Some special days may be out of date.');
-      } else {
-        setSyncWarning(null);
+        return;
       }
+      setSyncWarning(null);
+      if (!(data as { skipped?: boolean } | null)?.skipped) await fetchWorldHolidays();
     } catch (e) {
       if (!isMountedRef.current) return;
       console.error('sync-world-holidays invoke error:', e);
       setSyncWarning('Some special days may be out of date.');
     }
-  }, []);
+  }, [fetchWorldHolidays]);
 
   useEffect(() => {
-    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
     (async () => {
       setIsLoadingWorld(true);
       await fetchWorldHolidays();
-      if (cancelled) return;
-      await syncFromNager();
-      if (cancelled) return;
-      setIsLoadingWorld(false);
+      if (isMountedRef.current) setIsLoadingWorld(false); // the UI is usable now...
+      await syncFromNager(); // ...the sync continues in the background
     })();
 
     const channel = supabase
       .channel('world-holidays')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'world_holidays' },
-        () => {
-          if (!cancelled) fetchWorldHolidays();
-        },
-      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'world_holidays' }, () => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(fetchWorldHolidays, REALTIME_DEBOUNCE_MS);
+      })
       .subscribe();
 
     return () => {
-      cancelled = true;
+      if (timer) clearTimeout(timer);
       supabase.removeChannel(channel);
     };
   }, [fetchWorldHolidays, syncFromNager]);
 
+  const retryWorld = useCallback(async () => {
+    setIsLoadingWorld(true);
+    await fetchWorldHolidays();
+    if (isMountedRef.current) setIsLoadingWorld(false);
+  }, [fetchWorldHolidays]);
+
   const onRefresh = useCallback(async () => {
     setIsRefreshing(true);
-    try {
-      await supabase.functions.invoke('sync-world-holidays', {
-        body: { year: new Date().getFullYear(), force: true },
-      });
-    } catch (e) {
-      console.error('manual sync error:', e);
+    if (Date.now() - lastForcedSyncRef.current > SYNC_COOLDOWN_MS) {
+      try {
+        const { error } = await supabase.functions.invoke('sync-world-holidays', {
+          body: { force: true },
+        });
+        if (error) console.error('manual sync error:', error.message);
+        else lastForcedSyncRef.current = Date.now();
+      } catch (e) {
+        console.error('manual sync error:', e);
+      }
     }
     await fetchWorldHolidays();
-    if (isMountedRef.current) setIsRefreshing(false);
+    if (isMountedRef.current) {
+      setTodayMs(startOfToday().getTime());
+      setIsRefreshing(false);
+    }
   }, [fetchWorldHolidays]);
 
   const friendUpcoming = useMemo<FriendUpcomingItem[]>(() => {
@@ -432,6 +447,7 @@ const DatesScreen: React.FC = () => {
     friends.forEach((f) => {
       f.importantDates.forEach((d) => {
         rows.push({
+          key: `${f.id}-${d.id}`,
           friendId: f.id,
           friendName: f.name,
           emoji: f.emoji,
@@ -445,17 +461,18 @@ const DatesScreen: React.FC = () => {
       });
     });
     return rows.sort((a, b) => a.days - b.days);
-  }, [friends]);
+    // todayMs: recompute countdowns after midnight
+  }, [friends, todayMs]);
 
   // The full list (search, country filter, sections) lives in the
   // WorldSpecialDays screen; here we only need the nearest few.
   const worldPreview = useMemo<UpcomingSpecialDay[]>(
     () =>
-      dedupeSpecialDays(worldSpecialDays)
-        .map(withNextDate)
-        .sort((a: { days: number; }, b: { days: number; }) => a.days - b.days)
-        .slice(0, WORLD_PREVIEW_COUNT),
-    [worldSpecialDays],
+      buildUpcoming(dedupeSpecialDays(worldSpecialDays), new Date(todayMs)).slice(
+        0,
+        WORLD_PREVIEW_COUNT,
+      ),
+    [worldSpecialDays, todayMs],
   );
 
   const soonest = friendUpcoming.slice(0, 3);
@@ -524,7 +541,7 @@ const DatesScreen: React.FC = () => {
             <SectionHeader title="Coming up" subtitle="Your nearest important dates" />
             {soonest.map((item) => (
               <TouchableOpacity
-                key={`${item.friendId}-${item.label}-${item.date}`}
+                key={item.key}
                 onPress={() => goToFriendProfile(item.friendId)}
                 activeOpacity={0.8}
                 accessibilityRole="button"
@@ -591,7 +608,7 @@ const DatesScreen: React.FC = () => {
             ) : (
               friendUpcoming.map((item) => (
                 <TouchableOpacity
-                  key={`${item.friendId}-${item.label}-${item.date}`}
+                  key={item.key}
                   onPress={() => goToFriendProfile(item.friendId)}
                   activeOpacity={0.8}
                   accessibilityRole="button"
@@ -620,18 +637,16 @@ const DatesScreen: React.FC = () => {
           </View>
         ) : (
           <View>
-            {syncWarning && !isLoadingWorld && (
-              <Text style={styles.warning}>{syncWarning}</Text>
-            )}
+            {syncWarning && !isLoadingWorld && <Text style={styles.warning}>{syncWarning}</Text>}
 
             {isLoadingWorld ? (
               <View style={styles.loaderWrap}>
                 <ActivityIndicator color={colors.primary} />
               </View>
-            ) : worldError ? (
+            ) : worldError && worldSpecialDays.length === 0 ? (
               <View style={styles.emptyWrap}>
                 <Text style={styles.empty}>{worldError}</Text>
-                <TouchableOpacity onPress={onRefresh} style={styles.retryBtn}>
+                <TouchableOpacity onPress={retryWorld} style={styles.retryBtn} accessibilityRole="button">
                   <Text style={styles.retryText}>Try Again</Text>
                 </TouchableOpacity>
               </View>
@@ -648,9 +663,13 @@ const DatesScreen: React.FC = () => {
                     accessibilityRole="button"
                     accessibilityLabel={`${w.name}, ${MONTH_NAMES[w.month - 1]} ${w.day}`}
                   >
-                    <View style={styles.worldEmojiWrap}>
-                      <Text style={{ fontSize: 22 }}>{w.emoji}</Text>
-                    </View>
+                    <SpecialDayThumb
+                      id={String(w.id)}
+                      name={w.name}
+                      icon={w.icon}
+                      category={w.category}
+                      size={40}
+                    />
                     <View style={{ flex: 1, marginLeft: spacing.sm }}>
                       <Text style={styles.rowTitle} numberOfLines={1}>
                         {w.name}
@@ -737,14 +756,6 @@ const makeStyles = (colors: ColorScheme) =>
     rowSub: { ...typography.caption, color: colors.textFaint, marginTop: 2 },
     rowDays: { ...typography.caption, color: colors.primary, fontWeight: '700' },
     rowDaysToday: { color: colors.gold },
-    worldEmojiWrap: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      backgroundColor: colors.cardAlt,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
     warning: {
       ...typography.caption,
       color: colors.gold,
@@ -766,6 +777,7 @@ const makeStyles = (colors: ColorScheme) =>
       alignItems: 'center',
     },
     retryBtn: {
+      alignSelf: 'center',
       marginTop: spacing.sm,
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.sm,

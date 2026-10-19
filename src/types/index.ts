@@ -1,3 +1,8 @@
+// =====================================================================
+// Shared app types. camelCase = app models, snake_case *Row = Postgres rows.
+// Mapping between them lives in src/utils/mappers.ts.
+// =====================================================================
+
 export type RelationshipCategory =
   | 'Best Friend'
   | 'Close Friend'
@@ -9,14 +14,8 @@ export type RelationshipCategory =
   | 'Situationship'
   | 'Coworker';
 
-export type ImportantDateType =
-  | 'Birthday'
-  | 'Anniversary'
-  | 'Graduation'
-  | 'Meet Day'
-  | 'Custom';
+export type ImportantDateType = 'Birthday' | 'Anniversary' | 'Graduation' | 'Meet Day' | 'Custom';
 
-// ---------------- NEW ----------------
 export type Gender = 'Woman' | 'Man' | 'Non-binary' | 'Prefer not to say' | 'Custom';
 
 export type LoveLanguage =
@@ -26,12 +25,13 @@ export type LoveLanguage =
   | 'Gifts'
   | 'Physical Touch';
 
+export type NoteTag = 'Conversation' | 'Interest' | 'Important Detail' | 'Memory';
+
 export interface SocialLink {
   id: string;
   platform: string; // 'Instagram' | 'Snapchat' | 'TikTok' | 'X' | 'LinkedIn' | 'WhatsApp' | 'Other'
   handle: string;
 }
-// --------------------------------------
 
 export interface ImportantDate {
   id: string;
@@ -45,7 +45,7 @@ export interface Note {
   id: string;
   content: string;
   createdAt: string; // ISO date
-  tag?: 'Conversation' | 'Interest' | 'Important Detail' | 'Memory';
+  tag?: NoteTag;
 }
 
 export interface Friend {
@@ -56,7 +56,7 @@ export interface Friend {
   emoji: string;
   category: RelationshipCategory;
   phone?: string;
-  instagram?: string;
+  instagram?: string; // legacy shortcut; prefer socialLinks
   city?: string;
   school?: string;
   interests: string[];
@@ -67,7 +67,6 @@ export interface Friend {
   favorite: boolean;
   createdAt: string;
 
-  // ---------------- NEW ----------------
   photoUri?: string;
   gender?: Gender;
   genderCustom?: string;
@@ -84,10 +83,8 @@ export interface Friend {
   socialLinks: SocialLink[];
   isArchived: boolean;
   updatedAt: string; // ISO
-  // --------------------------------------
 }
 
-// ---------------- UserProfile (kengaytirilgan, yakuniy versiya) ----------------
 export interface UserProfile {
   id: string;
   name: string;
@@ -101,7 +98,6 @@ export interface UserProfile {
   instagram?: string;
   interests: string[];
 
-  // ---------------- NEW ----------------
   avatarUrl?: string;
   pushEnabled: boolean;
   messageNotif: boolean;
@@ -113,11 +109,8 @@ export interface UserProfile {
   activityStatus: boolean;
   blockedUserIds: string[];
   mfaEnabled: boolean;
-  // --------------------------------------
 
-  // ---------------- NEW: onboarding ----------------
   onboardingCompleted: boolean;
-  // --------------------------------------
 }
 
 export type SpecialDayCategory =
@@ -129,15 +122,16 @@ export type SpecialDayCategory =
 
 export interface WorldSpecialDay {
   id: string;
-  name: string;                 // English nomi
-  localName?: string | null;    // mahalliy tildagi nomi
-  month: number;                // 1-12
+  name: string; // English name
+  localName?: string | null; // local-language name
+  month: number; // 1-12
   day: number;
-  year?: number;                // keyingi uchraydigan sana yili
-  emoji?: string;               // eski ustun, endi ishlatilmaydi
-  icon?: string;                // Ionicons nomi, masalan 'flag-outline'
+  year?: number; // year of the next occurrence
+  /** @deprecated Legacy column, no longer written. Use `icon` / SpecialDayThumb. */
+  emoji?: string | null;
+  icon?: string; // Ionicons name, e.g. 'flag-outline'
   category?: SpecialDayCategory;
-  countryCode?: string;         // 'UZ', 'US', ... yoki 'GLOBAL'
+  countryCode?: string; // 'UZ', 'US', ... or 'GLOBAL'
 }
 
 export interface SpecialDayDetails {
@@ -153,36 +147,31 @@ export interface SpecialDayDetails {
 
 // =====================================================================
 // APP CONTACTS (username-based, real-user relationships)
-// -----------------------------------------------------------------
-// These are DIFFERENT from `Friend`. A `Friend` is a private diary
-// entry the user writes about someone (birthday, interests, notes —
-// that person doesn't need a Relatr account at all). An `AppContact`
-// is another REAL Relatr user, connected through the `friendships`
-// table by their unique `username` (same table StoriesScreen's
-// SearchModal already reads/writes for friend requests). Contacts
-// gate who can see your Stories; Friends are your private notes
-// about people, who may or may not be Contacts too.
+// ---------------------------------------------------------------------
+// DIFFERENT from `Friend`. A `Friend` is a private diary entry the user
+// writes about someone (that person needs no Relatr account). An
+// `AppContact` is another REAL Relatr user, connected through the
+// `friendships` table by their unique `username`. Contacts gate who can
+// see your Stories; Friends are your private notes about people.
 // =====================================================================
 
 export type FriendshipStatus = 'pending' | 'accepted';
 
 export interface AppContact {
-  id: string;               // friendships row id
-  userId: string;            // the OTHER user's profile id
+  id: string; // friendships row id
+  userId: string; // the OTHER user's profile id
   name: string;
   username: string;
   emoji: string;
   avatarColor: string;
   avatarUrl?: string;
   status: FriendshipStatus;
-  isIncoming: boolean;       // true if THEY requested (I must accept/decline)
+  isIncoming: boolean; // true if THEY requested (I must accept/decline)
   createdAt: string;
 }
 
 // =====================================================================
-// Supabase row shapes (snake_case, as stored in Postgres).
-// Mapping to/from the camelCase app types above happens in
-// src/utils/mappers.ts.
+// Supabase row shapes (snake_case, as stored in Postgres)
 // =====================================================================
 
 export interface FriendRow {
@@ -204,7 +193,6 @@ export interface FriendRow {
   created_at: string;
   updated_at: string;
 
-  // ---------------- NEW ----------------
   photo_uri: string | null;
   gender: Gender | null;
   gender_custom: string | null;
@@ -219,7 +207,6 @@ export interface FriendRow {
   gift_preferences_note: string | null;
   personality_notes: string | null;
   is_archived: boolean;
-  // --------------------------------------
 }
 
 export interface ImportantDateRow {
@@ -238,11 +225,10 @@ export interface NoteRow {
   friend_id: string;
   owner_id: string;
   content: string;
-  tag: Note['tag'] | null;
+  tag: NoteTag | null;
   created_at: string;
 }
 
-// ---------------- NEW ----------------
 export interface SocialLinkRow {
   id: string;
   friend_id: string;
@@ -251,9 +237,7 @@ export interface SocialLinkRow {
   handle: string;
   created_at: string;
 }
-// --------------------------------------
 
-// ---------------- ProfileRow (kengaytirilgan, yakuniy versiya) ----------------
 export interface ProfileRow {
   id: string;
   name: string;
@@ -269,7 +253,6 @@ export interface ProfileRow {
   created_at: string;
   updated_at: string;
 
-  // ---------------- NEW ----------------
   avatar_url: string | null;
   push_enabled: boolean;
   message_notif: boolean;
@@ -280,11 +263,8 @@ export interface ProfileRow {
   private_account: boolean;
   activity_status: boolean;
   blocked_user_ids: string[];
-  // --------------------------------------
 
-  // ---------------- NEW: onboarding ----------------
   onboarding_completed: boolean;
-  // --------------------------------------
 }
 
 export interface BlockedUserRow {
@@ -294,29 +274,30 @@ export interface BlockedUserRow {
   created_at: string;
 }
 
-// `world_holidays` jadvali (Nager.Date sinxronizatsiyasi yozadi).
-// Sana `month` / `day` / `year` ustunlarida saqlanadi.
+/** `world_holidays` table, written by the sync-world-holidays Edge Function. */
 export interface WorldHolidayRow {
   id: string;
   external_id?: string | null;
   name: string;
-  emoji: string;
   month: number;
   day: number;
   year?: number | null;
   country_code: string;
-  source?: string | null;
+  source?: 'nager' | 'curated' | string | null;
 
-  // Ixtiyoriy / eski ustunlar (bazada bo'lmasligi mumkin)
+  /** @deprecated Legacy column; the sync writes ''. */
+  emoji?: string | null;
   local_name?: string | null;
   icon?: string | null;
   category?: SpecialDayCategory | null;
+  is_fixed?: boolean | null;
+  types?: string[] | null;
   description?: string | null;
   event_date?: string | null;
   created_at?: string;
+  updated_at?: string;
 }
 
-// ---------------- NEW: App Contacts ----------------
 export interface FriendshipRow {
   id: string;
   user_id: string;
@@ -326,9 +307,7 @@ export interface FriendshipRow {
   updated_at: string;
 }
 
-// Minimal profile projection joined alongside a friendship row when
-// fetching contacts (id/name/username/emoji/avatar only — no bio,
-// settings, etc. Contacts never need the full ProfileRow).
+/** Minimal profile projection joined with a friendship row when fetching contacts. */
 export interface ContactProfileRow {
   id: string;
   name: string;
@@ -337,4 +316,3 @@ export interface ContactProfileRow {
   avatar_color: string;
   avatar_url: string | null;
 }
-// --------------------------------------
